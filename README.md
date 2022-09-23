@@ -20,7 +20,7 @@ Config is read from `~/.config/wayper/config.toml`
 ``` toml
 # table with output's name
 [eDP-1]
-name = eDP-1 # optional
+name = "eDP-1" # optional
 path = "path/to/wallpaper/folder/orfile"
 duration = 10 # duration between rerenders, or wallpaper switching
 ```
