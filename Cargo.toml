@@ -1,0 +1,28 @@
+[package]
+name = "wayper"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+eyre = "0.6"
+#smithay = "0.3"
+#wayland-server = "0.29"
+smithay-client-toolkit = "0.16"
+tracing = "0.1"
+tracing-subscriber = {version = "0.3", features =["env-filter", "fmt",  "time", "local-time"]}
+image = "0.24"
+timer = "0.2"
+chrono = "0.4"
+tracing-appender = "0.2"
+walkdir = "2"
+mime_guess = "2"
+mime = "0.3"
+toml = "0.5"
+serde = {version = "1", features = ["derive","rc"]}
+derivative = "2.2.0"
+rand = "0.8"
+notify = "5"
+notify-debouncer-mini = "0.2"
+
