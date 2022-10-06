@@ -1,11 +1,11 @@
 use std::{
-    cell::{Cell, RefCell},
+    cell::Cell,
     convert::TryInto,
-    io::{self, BufWriter, Write},
+    io::{BufWriter, Write},
     path::{Path, PathBuf},
     rc::Rc,
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use config::OutputConfig;
@@ -35,10 +35,8 @@ use smithay_client_toolkit::{
     shm::AutoMemPool,
     WaylandSource,
 };
-use tracing::{debug, error, info, instrument::WithSubscriber, trace, warn, Level};
-use tracing_subscriber::{
-    filter, fmt, prelude::__tracing_subscriber_SubscriberExt, FmtSubscriber, Layer,
-};
+use tracing::{debug, error, info, trace, warn};
+use tracing_subscriber::{filter, fmt, prelude::__tracing_subscriber_SubscriberExt, Layer};
 use walkdir::WalkDir;
 
 mod config;
@@ -524,9 +522,11 @@ fn main() -> Result<()> {
         display.flush().unwrap();
         // dispatch event
         event_loop.dispatch(None, &mut ()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10))
     }
 }
 
+/// Poll the surfaces' timers, redraw if timer is over
 fn poll(tx: Sender<()>, timer: &timer::Timer, surface: &mut WallSurface) {
     if !surface.handle_events() {
         let now = Instant::now();
@@ -543,7 +543,7 @@ fn poll(tx: Sender<()>, timer: &timer::Timer, surface: &mut WallSurface) {
                 }
                 Err(e) => {
                     error!("{e:?}");
-                    tx.send(()).unwrap();
+                    //tx.send(()).unwrap();
                 }
             };
         }
