@@ -245,6 +245,16 @@ fn main() -> Result<()> {
     )?;
     let watcher = debouncer.watcher();
     watcher.watch(config_path, notify::RecursiveMode::Recursive)?;
+    let watcher_surfaces_handle = Arc::clone(&surfaces);
+    {
+        for (_, surface) in watcher_surfaces_handle.lock().unwrap().iter() {
+            let surface = surface.lock().unwrap();
+            watcher.watch(
+                surface.output_config.path.clone().unwrap().as_path(),
+                notify::RecursiveMode::Recursive,
+            )?;
+        }
+    }
     let mut state = LoopState {
         handle: event_loop.handle(),
         timer_token: timer_hashmap,
