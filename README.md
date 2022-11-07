@@ -8,8 +8,9 @@ Just a curious foray into the wayland protocol.
 
 ## Features
 - Sets wallpapers from images
-- Rotate images in a directory with set duration
+- Rotate through images in a directory with set duration
 - Config hotreloads
+- Multi-output (displays) support
 
 ## Configuration
 
@@ -27,9 +28,20 @@ duration = 10 # duration between rerenders, or wallpaper switching
 
 ## Caveats
 
-- Ideally this should run as a daemon, as the process needs to be alive for wayland to render the
-surface.
+- Running this as a daemon is a good idea
 - So many unwraps.
+
+## Building
+
+1. Get the latest Rust toolchain from your package distribution or [rustup](https://rustup.rs/)
+2. Clone the repo.
+3. Run `cargo run --release` to run it, or `cargo install --path .` to install via cargo.
+
+## TODO
+
+- Socket for control
+- Allow multiple configurations for same output with conditions?
+- Execute command/script on wallpaper change
 
 ## Inspirations
 - [wpaperd](https://github.com/danyspin97/wpaperd)
