@@ -26,3 +26,6 @@ rand = "0.8"
 notify = "5"
 notify-debouncer-mini = "0.2"
 
+[profile.dev.package]
+# image runs too slow in debug builds. opt-level 3 helps a bit
+image.opt-level = 3

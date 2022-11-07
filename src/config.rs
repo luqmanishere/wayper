@@ -1,9 +1,7 @@
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    str::FromStr,
     sync::Arc,
-    time::Duration,
 };
 
 use eyre::{eyre, Result};
@@ -21,7 +19,7 @@ pub struct Config {
 
 impl Config {
     pub fn load(path: &Path) -> Result<Self> {
-        let mut config: Self = toml::from_str(&std::fs::read_to_string(&path)?)?;
+        let mut config: Self = toml::from_str(&std::fs::read_to_string(path)?)?;
         config.path = Some(path.into());
         Ok(config)
     }
@@ -51,6 +49,7 @@ pub struct OutputConfig {
 }
 
 impl OutputConfig {
+    #[allow(dead_code)]
     pub fn load<P>(path: P) -> Result<HashMap<String, Self>>
     where
         P: AsRef<Path>,
