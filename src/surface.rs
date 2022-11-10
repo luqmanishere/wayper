@@ -24,7 +24,7 @@ use smithay_client_toolkit::{
     },
     shm::AutoMemPool,
 };
-use tracing::{debug, info, trace};
+use tracing::{debug, info};
 use walkdir::WalkDir;
 
 use crate::config::OutputConfig;
@@ -46,8 +46,6 @@ pub struct WallSurface {
     dimensions: (u32, u32),
     current_img: Option<PathBuf>,
     buffer: Option<wl_buffer::WlBuffer>,
-    time_passed: Instant,
-    redraw: bool,
     pub output_info: OutputInfo,
     pub output_config: Arc<OutputConfig>,
     img_list: Option<Vec<PathBuf>>,
@@ -154,8 +152,6 @@ impl WallSurface {
             dimensions: (0, 0),
             current_img,
             buffer: None,
-            time_passed: Instant::now(),
-            redraw: true,
             img_list,
             index: None,
             hide: false,
@@ -175,18 +171,6 @@ impl WallSurface {
             }
             None => false,
         }
-    }
-
-    pub fn should_redraw(&mut self, time: &Instant) -> bool {
-        let elapsed = {
-            let delta = time.duration_since(self.time_passed);
-            trace!("time since last update: {:?}", delta);
-            std::time::Duration::from_secs(self.output_config.duration.unwrap() as u64)
-                .saturating_sub(delta)
-                == std::time::Duration::ZERO
-        };
-
-        (self.redraw || elapsed) && self.dimensions.0 != 0
     }
 
     pub fn next(&mut self) -> Option<&PathBuf> {
@@ -212,7 +196,7 @@ impl WallSurface {
 
     /// the drawing function
     #[tracing::instrument(skip_all, fields(output = %self.output_info.name))]
-    pub fn draw(&mut self, now: Instant) -> Result<()> {
+    pub fn draw(&mut self) -> Result<()> {
         if self.dimensions == (0, 0) {
             return Err(eyre!(
                 "dimensions are 0! has compositor sent a configure event?"
@@ -274,8 +258,6 @@ impl WallSurface {
 
             // commit
             self.surface.commit();
-            self.redraw = false;
-            self.time_passed = now;
             info!("Finished drawing current wallpaper: {}", path.display());
         } else {
             self.buffer = Some(
@@ -322,8 +304,6 @@ impl WallSurface {
 
             // commit
             self.surface.commit();
-            self.redraw = false;
-            self.time_passed = now;
             info!("current wallpaper is hidden");
         }
         Ok(())
@@ -366,7 +346,6 @@ impl WallSurface {
             None
         };
         self.output_config = output_config;
-        self.redraw = true;
         Ok(())
     }
 

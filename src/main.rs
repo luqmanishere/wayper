@@ -178,7 +178,7 @@ fn main() -> Result<()> {
 
     let timer_surfaces_handle = Arc::clone(&surfaces);
 
-    let mut timer_hashmap = HashMap::new();
+    let mut timer_token_hashmap = HashMap::new();
     {
         for (_, surface) in timer_surfaces_handle.lock().unwrap().iter_mut() {
             let name = surface.lock().unwrap().output_info.name.clone();
@@ -191,16 +191,13 @@ fn main() -> Result<()> {
                     debug!("calloop timer called for: {:?}", deadline);
                     let mut surface = timer_surface_handle.lock().unwrap();
                     if !surface.handle_events() {
-                        let now = Instant::now();
-                        if surface.should_redraw(&now) {
-                            info!("surface will redraw");
-                            match surface.draw(now) {
-                                Ok(_) => {}
-                                Err(e) => {
-                                    error!("{e:?}");
-                                }
-                            };
-                        }
+                        info!("surface will redraw");
+                        match surface.draw() {
+                            Ok(_) => {}
+                            Err(e) => {
+                                error!("{e:?}");
+                            }
+                        };
                     }
                     display_handle.flush().unwrap();
 
@@ -211,7 +208,7 @@ fn main() -> Result<()> {
                     ))
                 })
                 .unwrap();
-            timer_hashmap.insert(name, timer_token);
+            timer_token_hashmap.insert(name, timer_token);
         }
     }
 
@@ -220,7 +217,7 @@ fn main() -> Result<()> {
     let watcher_surfaces_handle = Arc::clone(&surfaces);
     event_loop
         .handle()
-        .insert_source(watcher_channel, move |_, _, _| {
+        .insert_source(watcher_channel, move |_, _, _shared_data| {
             info!("Config changed!");
             let mut watcher_config_handle = watcher_config_handle.lock().unwrap();
             watcher_config_handle.update().unwrap();
@@ -312,7 +309,7 @@ fn main() -> Result<()> {
 
     let mut state = LoopState {
         handle: event_loop.handle(),
-        timer_token: timer_hashmap,
+        timer_token: timer_token_hashmap,
         surfaces: Arc::clone(&surfaces),
         socket_counter: 0,
     };
