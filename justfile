@@ -4,3 +4,6 @@ run:
 
 sloc:
     wc -l src/*.rs
+
+ping:
+    cargo r --bin wayperctl -- ping

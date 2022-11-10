@@ -1,11 +1,13 @@
 use std::{
     collections::HashMap,
+    io::{Read, Write},
+    os::unix::net::{UnixListener, UnixStream},
     path::Path,
     sync::{Arc, Mutex},
     time::Instant,
 };
 
-use eyre::{eyre, Result};
+use eyre::{eyre, Context, Result};
 use smithay_client_toolkit::{
     default_environment,
     environment::SimpleGlobal,
@@ -23,6 +25,7 @@ use smithay_client_toolkit::{
     WaylandSource,
 };
 use tracing::{debug, error, info};
+use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{filter, fmt, prelude::__tracing_subscriber_SubscriberExt, Layer};
 
 use crate::surface::WallSurface;
@@ -66,12 +69,13 @@ default_environment!(Env,
 pub struct LoopState {
     handle: LoopHandle<'static, Self>,
     timer_token: HashMap<String, RegistrationToken>,
+    surfaces: Arc<Mutex<Vec<(u32, Arc<Mutex<WallSurface>>)>>>,
+    socket_counter: u64,
 }
 
-fn main() -> Result<()> {
+fn start_logging() -> Vec<WorkerGuard> {
     let mut guards = Vec::new();
-
-    let file_appender = tracing_appender::rolling::hourly("/tmp", "wayper");
+    let file_appender = tracing_appender::rolling::daily("/tmp/wayper", "log");
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
     guards.push(guard);
 
@@ -95,6 +99,11 @@ fn main() -> Result<()> {
         );
 
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
+    info!("logger started!");
+    guards
+}
+fn main() -> Result<()> {
+    let _guards = start_logging();
     let (env, display, queue) =
         new_default_environment!(Env, fields = [layer_shell: SimpleGlobal::new(),])
             .expect("Initial roundtrip failed!");
@@ -167,22 +176,20 @@ fn main() -> Result<()> {
         .quick_insert(event_loop.handle())
         .unwrap();
 
-    let _handle = Arc::clone(&surfaces);
-    let handle = Arc::clone(&surfaces);
-    //let mut update_handler = move |_, _, _| {};
+    let timer_surfaces_handle = Arc::clone(&surfaces);
 
     let mut timer_hashmap = HashMap::new();
     {
-        for (_, surface) in handle.lock().unwrap().iter_mut() {
+        for (_, surface) in timer_surfaces_handle.lock().unwrap().iter_mut() {
             let name = surface.lock().unwrap().output_info.name.clone();
-            let surface = Arc::clone(surface);
+            let timer_surface_handle = Arc::clone(surface);
             let calloop_timer = calloop::timer::Timer::immediate();
             let display_handle = display.clone();
             let timer_token = event_loop
                 .handle()
                 .insert_source(calloop_timer, move |deadline, _, _shared_data| {
                     debug!("calloop timer called for: {:?}", deadline);
-                    let mut surface = surface.lock().unwrap();
+                    let mut surface = timer_surface_handle.lock().unwrap();
                     if !surface.handle_events() {
                         let now = Instant::now();
                         if surface.should_redraw(&now) {
@@ -208,13 +215,12 @@ fn main() -> Result<()> {
         }
     }
 
-    let (tx, rx): (Sender<()>, Channel<()>) = calloop::channel::channel();
+    let (watcher_tx, watcher_channel): (Sender<()>, Channel<()>) = calloop::channel::channel();
     let watcher_config_handle = Arc::clone(&config);
     let watcher_surfaces_handle = Arc::clone(&surfaces);
     event_loop
         .handle()
-        .insert_source(rx, move |_, _, _| {
-            //info!("Callback called!");
+        .insert_source(watcher_channel, move |_, _, _| {
             info!("Config changed!");
             let mut watcher_config_handle = watcher_config_handle.lock().unwrap();
             watcher_config_handle.update().unwrap();
@@ -229,14 +235,13 @@ fn main() -> Result<()> {
         })
         .unwrap();
 
-    // let (wtx, wrx) = std::sync::mpsc::channel();
     let mut debouncer = notify_debouncer_mini::new_debouncer(
         std::time::Duration::from_secs(10),
         None,
         move |res| match res {
             Ok(o) => {
                 debug!("config watcher: {:?}", o);
-                tx.send(()).unwrap();
+                watcher_tx.send(()).unwrap();
             }
             Err(e) => {
                 error!("config watcher: {:?}", e);
@@ -255,10 +260,108 @@ fn main() -> Result<()> {
             )?;
         }
     }
+
+    let (socket_tx, socket_channel): (Sender<UnixStream>, Channel<UnixStream>) =
+        calloop::channel::channel::<UnixStream>();
+    event_loop
+        .handle()
+        .insert_source(socket_channel, move |ev, _, shared_data| {
+            debug!("stream received from listener");
+            match ev {
+                calloop::channel::Event::Msg(eve) => {
+                    shared_data.socket_counter += 1;
+                    match handle_stream(
+                        shared_data.socket_counter,
+                        eve,
+                        Arc::clone(&shared_data.surfaces),
+                    ) {
+                        Ok(_) => {
+                            debug!("stream is handled");
+                        }
+                        Err(e) => {
+                            error!("error handling stream: {e}");
+                        }
+                    }
+                }
+                calloop::channel::Event::Closed => {}
+            }
+            //
+        })
+        .unwrap();
+    std::thread::spawn(move || -> Result<()> {
+        let socket_path = "/tmp/wayper/.socket.sock";
+        if std::fs::metadata(socket_path).is_ok() {
+            info!("previous socket detected");
+            info!("removing previous socket");
+            std::fs::remove_file(socket_path)
+                .with_context(|| eyre!("could not delete previous socket at {:?}", socket_path))?;
+        }
+        let unix_listener = UnixListener::bind(socket_path)
+            .with_context(|| eyre!("could not create unix socket"))?;
+
+        loop {
+            match unix_listener.accept() {
+                Ok((unix_stream, _)) => socket_tx.send(unix_stream).unwrap(),
+                Err(e) => {
+                    error!("failed accepting connection from unixlistener: {e}");
+                    continue;
+                }
+            }
+        }
+    });
+
     let mut state = LoopState {
         handle: event_loop.handle(),
         timer_token: timer_hashmap,
+        surfaces: Arc::clone(&surfaces),
+        socket_counter: 0,
     };
     event_loop.run(None, &mut state, |_shared_data| {})?;
+
+    Ok(())
+}
+
+#[tracing::instrument(skip_all, fields(counter = _counter))]
+fn handle_stream(
+    _counter: u64,
+    mut stream: UnixStream,
+    surfaces: Arc<Mutex<Vec<(u32, Arc<Mutex<WallSurface>>)>>>,
+) -> Result<()> {
+    let mut msg = String::new();
+    stream
+        .read_to_string(&mut msg)
+        .context("failed to read the stream")?;
+    debug!("msg received on socket1: {msg}");
+
+    if msg == "ping" {
+        write_to_stream(&mut stream, "pong".to_string())?;
+    } else if msg == "current" {
+        for (_, surface) in surfaces.lock().unwrap().iter() {
+            let surface = surface.lock().unwrap();
+            let surface_name = surface.output_info.name.clone();
+            let wallpaper = surface.current_img();
+            write_to_stream(&mut stream, surface_name)?;
+            let wallpaper = format!("{}\n", wallpaper.display());
+            write_to_stream(&mut stream, wallpaper)?;
+        }
+    } else if msg == "toggle" {
+        for (_, surface) in surfaces.lock().unwrap().iter_mut() {
+            surface.lock().unwrap().toggle_visiblity();
+        }
+    } else {
+        write_to_stream(&mut stream, "not implemented".to_string())?;
+    }
+    Ok(())
+}
+
+/// Helper function to write to a unix stream
+fn write_to_stream(stream: &mut UnixStream, mut s: String) -> Result<()> {
+    if !s.ends_with('\n') {
+        s.push('\n');
+    }
+    stream
+        .write(s.as_bytes())
+        .wrap_err("failed to write to stream")?;
+    debug!("wrote to stream: {}", s.trim());
     Ok(())
 }

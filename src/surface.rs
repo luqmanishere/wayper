@@ -52,6 +52,7 @@ pub struct WallSurface {
     pub output_config: Arc<OutputConfig>,
     img_list: Option<Vec<PathBuf>>,
     index: Option<usize>,
+    hide: bool,
 }
 
 impl WallSurface {
@@ -157,6 +158,7 @@ impl WallSurface {
             redraw: true,
             img_list,
             index: None,
+            hide: false,
         }
     }
 
@@ -247,33 +249,83 @@ impl WallSurface {
         }
 
         // create new buffer, draw image to buffer
-        self.buffer = Some(
-            self.pool
-                .try_draw::<_, eyre::Error>(
-                    width,
-                    height,
-                    stride,
-                    wl_shm::Format::Abgr8888,
-                    |canvas: &mut [u8]| {
-                        let mut writer = BufWriter::new(canvas);
-                        writer.write_all(image.as_raw()).unwrap();
-                        writer.flush().unwrap();
-                        Ok(())
-                    },
-                )
-                .context("creating wl_buffer in pool")?,
-        );
+        if !self.hide {
+            self.buffer = Some(
+                self.pool
+                    .try_draw::<_, eyre::Error>(
+                        width,
+                        height,
+                        stride,
+                        wl_shm::Format::Abgr8888,
+                        |canvas: &mut [u8]| {
+                            let mut writer = BufWriter::new(canvas);
+                            writer.write_all(image.as_raw()).unwrap();
+                            writer.flush().unwrap();
+                            Ok(())
+                        },
+                    )
+                    .context("creating wl_buffer in pool")?,
+            );
 
-        // Attach the buffer to the surface and mark the entire surface as damaged
-        self.surface.attach(self.buffer.as_ref(), 0, 0);
-        self.surface
-            .damage_buffer(0, 0, width as i32, height as i32);
+            // Attach the buffer to the surface and mark the entire surface as damaged
+            self.surface.attach(self.buffer.as_ref(), 0, 0);
+            self.surface
+                .damage_buffer(0, 0, width as i32, height as i32);
 
-        // commit
-        self.surface.commit();
-        self.redraw = false;
-        self.time_passed = now;
-        info!("Finished drawing current wallpaper: {}", path.display());
+            // commit
+            self.surface.commit();
+            self.redraw = false;
+            self.time_passed = now;
+            info!("Finished drawing current wallpaper: {}", path.display());
+        } else {
+            self.buffer = Some(
+                self.pool
+                    .try_draw::<_, eyre::Error>(
+                        width,
+                        height,
+                        stride,
+                        wl_shm::Format::Abgr8888,
+                        |canvas: &mut [u8]| {
+                            canvas
+                                .chunks_exact_mut(4)
+                                .enumerate()
+                                .for_each(|(index, chunk)| {
+                                    let x = ((index) % width as usize) as i32;
+                                    let y = (index / width as usize) as i32;
+
+                                    let a = 0xFF;
+                                    let r = i32::min(
+                                        ((width - x) * 0xFF) / width,
+                                        ((height - y) * 0xFF) / height,
+                                    );
+                                    let g = i32::min(
+                                        (x * 0xFF) / width,
+                                        ((height - y) * 0xFF) / height,
+                                    );
+                                    let b =
+                                        i32::min(((width - x) * 0xFF) / width, (y * 0xFF) / height);
+                                    let color = (a << 24) + (r << 16) + (g << 8) + b;
+
+                                    let array: &mut [u8; 4] = chunk.try_into().unwrap();
+                                    *array = color.to_le_bytes();
+                                });
+                            Ok(())
+                        },
+                    )
+                    .context("creating wl_buffer in pool")?,
+            );
+
+            // Attach the buffer to the surface and mark the entire surface as damaged
+            self.surface.attach(self.buffer.as_ref(), 0, 0);
+            self.surface
+                .damage_buffer(0, 0, width as i32, height as i32);
+
+            // commit
+            self.surface.commit();
+            self.redraw = false;
+            self.time_passed = now;
+            info!("current wallpaper is hidden");
+        }
         Ok(())
     }
 
@@ -316,6 +368,31 @@ impl WallSurface {
         self.output_config = output_config;
         self.redraw = true;
         Ok(())
+    }
+
+    pub fn current_img(&self) -> PathBuf {
+        if let Some(path) = &self.current_img {
+            path.clone()
+        } else {
+            self.img_list
+                .as_ref()
+                .unwrap()
+                .get(self.index.unwrap())
+                .unwrap()
+                .clone()
+        }
+    }
+
+    pub fn hide(&mut self) {
+        self.hide = true;
+    }
+
+    pub fn show(&mut self) {
+        self.hide = false;
+    }
+
+    pub fn toggle_visiblity(&mut self) {
+        self.hide = !self.hide;
     }
 }
 
