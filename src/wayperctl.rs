@@ -50,6 +50,16 @@ fn main() -> Result<()> {
                 println!("{}: {}", k, v);
             }
         }
+        Some("toggle") => {
+            let socket_path = "/tmp/wayper/.socket.sock";
+            let mut unix_stream = UnixStream::connect(socket_path)
+                .wrap_err_with(|| eyre!("could not connect to wayper socket at {socket_path}"))?;
+
+            unix_stream
+                .write(b"toggle")
+                .wrap_err("failed to write to wayper socket")?;
+            unix_stream.shutdown(std::net::Shutdown::Write)?;
+        }
         Some(_) => {}
         None => {}
     }
@@ -60,5 +70,6 @@ fn setup_cli() -> ArgMatches {
     Command::new("wayperctl")
         .subcommand(Command::new("ping"))
         .subcommand(Command::new("current"))
+        .subcommand(Command::new("toggle"))
         .get_matches()
 }
