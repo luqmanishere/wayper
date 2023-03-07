@@ -180,6 +180,7 @@ fn main() -> Result<()> {
 
     let mut timer_token_hashmap = HashMap::new();
     {
+        // TODO: refactor into function to auto renew timers when needed
         for (_, surface) in timer_surfaces_handle.lock().unwrap().iter_mut() {
             let name = surface.lock().unwrap().output_info.name.clone();
             let timer_surface_handle = Arc::clone(surface);
