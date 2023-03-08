@@ -70,6 +70,7 @@
               rust-analyzer
               rustc
               rustfmt
+              just
             ];
 
             RUST_SRC_PATH = rustPlatform.rustLibSrc;

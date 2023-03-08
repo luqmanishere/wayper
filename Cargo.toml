@@ -25,7 +25,7 @@ tracing-appender = "0.2"
 walkdir = "2"
 mime_guess = "2"
 mime = "0.3"
-toml = "0.5"
+toml = "0.7"
 serde = {version = "1", features = ["derive","rc"]}
 derivative = "2.2.0"
 rand = "0.8"

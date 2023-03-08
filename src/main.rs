@@ -4,7 +4,6 @@ use std::{
     os::unix::net::{UnixListener, UnixStream},
     path::Path,
     sync::{Arc, Mutex},
-    time::Instant,
 };
 
 use eyre::{eyre, Context, Result};
