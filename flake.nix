@@ -17,7 +17,7 @@
     }:
     parts.lib.mkFlake { inherit inputs; } {
       systems = [ "x86_64-linux" ];
-      imports = [ nci.flakeModule ];
+      imports = [ nci.flakeModule parts.flakeModules.easyOverlay ];
       perSystem = { config, pkgs, system, inputs', ... }:
         let
           crateName = "wayper";
@@ -80,13 +80,8 @@
 
           # export the release package of the crate as default package
           packages.default = crateOutputs.packages.release;
-        };
-      flake = { config, pkgs, system, inputs', self, outputs, ... }: {
 
-        overlays.default = final: _prev: {
-          wayper = self.packages.default.wayper-release;
         };
-      };
     };
 }
 
