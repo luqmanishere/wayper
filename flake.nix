@@ -17,7 +17,7 @@
     }:
     parts.lib.mkFlake { inherit inputs; } {
       systems = [ "x86_64-linux" ];
-      imports = [ nci.flakeModule parts.flakeModules.easyOverlay ];
+      imports = [ nci.flakeModule parts.flakeModules.easyOverlay devshell.flakeModule ];
       perSystem = { config, pkgs, system, inputs', ... }:
         let
           crateName = "wayper";
@@ -63,24 +63,32 @@
               };
             };
           };
-          # export the crate devshell as the default devshell
-          devShells.default = with pkgs; mkShell {
-            buildInputs = [
+
+          devshells.default = with pkgs;{
+            motd = ''
+              -----------------
+              -wayper devshell-
+              -----------------
+              $(type -p menu &>/dev/null && menu)
+            '';
+            env = [
+              { name = "RUST_SRC_PATH"; value = rustPlatform.rustLibSrc; }
+              { name = "LD_LIBRARY_PATH"; value = libPath; }
+            ];
+
+            packages = [
               cargo
               rust-analyzer
               rustc
               rustfmt
               just
             ];
-
-            RUST_SRC_PATH = rustPlatform.rustLibSrc;
-            LD_LIBRARY_PATH = libPath;
-
           };
 
           # export the release package of the crate as default package
           packages.default = crateOutputs.packages.release;
 
+          # export overlay using easyOverlays
           overlayAttrs = {
             inherit (config.packages) wayper;
           };
