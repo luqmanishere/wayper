@@ -81,7 +81,7 @@
           # export the release package of the crate as default package
           packages.default = crateOutputs.packages.release;
         };
-      flake = { config, pkgs, system, inputs', self, ... }: {
+      flake = { config, pkgs, system, inputs', self, outputs, ... }: {
 
         overlays.default = final: _prev: {
           wayper = self.packages.default.wayper-release;
