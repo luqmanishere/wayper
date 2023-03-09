@@ -81,6 +81,10 @@
           # export the release package of the crate as default package
           packages.default = crateOutputs.packages.release;
 
+          overlayAttrs = {
+            inherit (config.packages) wayper;
+          };
+          packages.wayper = crateOutputs.packages.release;
         };
     };
 }
