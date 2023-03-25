@@ -67,7 +67,7 @@ default_environment!(Env,
 #[allow(dead_code)]
 pub struct LoopState {
     handle: LoopHandle<'static, Self>,
-    timer_token: HashMap<String, RegistrationToken>,
+    timer_token: Arc<Mutex<HashMap<String, RegistrationToken>>>,
     surfaces: Arc<Mutex<Vec<(u32, Arc<Mutex<WallSurface>>)>>>,
     socket_counter: u64,
 }
@@ -101,6 +101,7 @@ fn start_logging() -> Vec<WorkerGuard> {
     info!("logger started!");
     guards
 }
+
 fn main() -> Result<()> {
     let _guards = start_logging();
     let (env, display, queue) =
@@ -114,17 +115,35 @@ fn main() -> Result<()> {
 
     let layer_shell = env.require_global::<zwlr_layer_shell_v1::ZwlrLayerShellV1>();
 
+    // create calloop event loop
+    let mut event_loop = calloop::EventLoop::<LoopState>::try_new().unwrap();
+    WaylandSource::new(queue)
+        .quick_insert(event_loop.handle())
+        .unwrap();
+    let timer_token_hashmap = Arc::new(Mutex::new(HashMap::new()));
+
     let env_handle = env.clone();
     let surfaces_handle = Arc::clone(&surfaces);
     let config_handle = Arc::clone(&config);
+    let display_handle = display.clone();
+    let event_loop_handle = event_loop.handle();
+    let timer_token_hashmap_handle = timer_token_hashmap.clone();
+    // TODO: use ids instead of name
     let output_handler = move |output: wl_output::WlOutput, info: &OutputInfo| {
         if info.obsolete {
-            // output removed, release the output
+            // delete surface
             surfaces_handle
                 .lock()
                 .unwrap()
                 .retain(|(i, _)| *i != info.id);
+
+            //  release the output
             output.release();
+
+            // delete the timer associated with the output
+            let mut timer_token_hashmap = { timer_token_hashmap_handle.lock().unwrap() };
+            let token = timer_token_hashmap.remove(&info.name).unwrap();
+            event_loop_handle.remove(token);
         } else {
             dbg!(info);
             // output created, make a new surface for it
@@ -142,17 +161,56 @@ fn main() -> Result<()> {
                         .unwrap(),
                 )
             };
-            (*surfaces_handle.lock().unwrap()).push((
-                info.id,
-                Arc::new(Mutex::new(WallSurface::new(
-                    &output,
-                    info,
-                    output_config,
-                    surface,
-                    &layer_shell.clone(),
-                    pool,
-                ))),
-            ));
+            let wall_surface = Arc::new(Mutex::new(WallSurface::new(
+                &output,
+                info,
+                output_config,
+                surface,
+                &layer_shell.clone(),
+                pool,
+            )));
+
+            let name = info.name.clone();
+            let calloop_timer = calloop::timer::Timer::immediate();
+            let display_handle = display_handle.clone();
+            let surface_handle = wall_surface.clone();
+            // insert timer and store its token
+            let timer_token = event_loop_handle
+                .insert_source(calloop_timer, move |deadline, _, _shared_data| {
+                    debug!("calloop timer called for: {:?}", deadline);
+                    let mut surface = surface_handle.lock().unwrap();
+                    if !surface.handle_events() {
+                        info!("surface will redraw");
+                        match surface.draw() {
+                            Ok(_) => {}
+                            Err(e) => {
+                                error!("{e:?}");
+                                if !surface.handle_events() {
+                                    info!("surface will redraw");
+                                    match surface.draw() {
+                                        Ok(_) => {}
+                                        Err(e) => {
+                                            error!("{e:?}");
+                                        }
+                                    };
+                                }
+                            }
+                        };
+                    }
+                    display_handle.flush().unwrap();
+
+                    // Set duration of next call
+                    let duration = surface.output_config.duration.unwrap() as u64;
+                    calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_secs(
+                        duration,
+                    ))
+                })
+                .unwrap();
+
+            // store timer tokens
+            (*timer_token_hashmap_handle.lock().unwrap()).insert(name, timer_token);
+            // store handle to surfaces
+            (*surfaces_handle.lock().unwrap()).push((info.id, wall_surface));
         }
     };
 
@@ -168,62 +226,19 @@ fn main() -> Result<()> {
     let _listener_handle =
         env.listen_for_outputs(move |output, info, _| output_handler(output, info));
 
-    // Set up wayland event loop
-    let mut event_loop = calloop::EventLoop::<LoopState>::try_new().unwrap();
-
-    WaylandSource::new(queue)
-        .quick_insert(event_loop.handle())
-        .unwrap();
-
-    let timer_surfaces_handle = Arc::clone(&surfaces);
-
-    let mut timer_token_hashmap = HashMap::new();
-    {
-        // TODO: refactor into function to auto renew timers when needed
-        for (_, surface) in timer_surfaces_handle.lock().unwrap().iter_mut() {
-            let name = surface.lock().unwrap().output_info.name.clone();
-            let timer_surface_handle = Arc::clone(surface);
-            let calloop_timer = calloop::timer::Timer::immediate();
-            let display_handle = display.clone();
-            let timer_token = event_loop
-                .handle()
-                .insert_source(calloop_timer, move |deadline, _, _shared_data| {
-                    debug!("calloop timer called for: {:?}", deadline);
-                    let mut surface = timer_surface_handle.lock().unwrap();
-                    if !surface.handle_events() {
-                        info!("surface will redraw");
-                        match surface.draw() {
-                            Ok(_) => {}
-                            Err(e) => {
-                                error!("{e:?}");
-                            }
-                        };
-                    }
-                    display_handle.flush().unwrap();
-
-                    // Set duration of next call
-                    let duration = surface.output_config.duration.unwrap() as u64;
-                    calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_secs(
-                        duration,
-                    ))
-                })
-                .unwrap();
-            timer_token_hashmap.insert(name, timer_token);
-        }
-    }
-
-    let (watcher_tx, watcher_channel): (Sender<()>, Channel<()>) = calloop::channel::channel();
-    let watcher_config_handle = Arc::clone(&config);
-    let watcher_surfaces_handle = Arc::clone(&surfaces);
+    let (config_watcher_tx, config_watcher_channel): (Sender<()>, Channel<()>) =
+        calloop::channel::channel();
+    let config_watcher_config_handle = Arc::clone(&config);
+    let config_watcher_surfaces_handle = Arc::clone(&surfaces);
     event_loop
         .handle()
-        .insert_source(watcher_channel, move |_, _, _shared_data| {
+        .insert_source(config_watcher_channel, move |_, _, _shared_data| {
             info!("Config changed!");
-            let mut watcher_config_handle = watcher_config_handle.lock().unwrap();
-            watcher_config_handle.update().unwrap();
-            for (_, surface) in watcher_surfaces_handle.lock().unwrap().iter_mut() {
+            let mut config_watcher_config_handle = config_watcher_config_handle.lock().unwrap();
+            config_watcher_config_handle.update().unwrap();
+            for (_, surface) in config_watcher_surfaces_handle.lock().unwrap().iter_mut() {
                 let mut surface = surface.lock().unwrap();
-                let new_config = watcher_config_handle
+                let new_config = config_watcher_config_handle
                     .get_output_config(&surface.output_info.name)
                     .unwrap();
                 surface.update_config(new_config).unwrap();
@@ -238,7 +253,7 @@ fn main() -> Result<()> {
         move |res| match res {
             Ok(o) => {
                 debug!("config watcher: {:?}", o);
-                watcher_tx.send(()).unwrap();
+                config_watcher_tx.send(()).unwrap();
             }
             Err(e) => {
                 error!("config watcher: {:?}", e);
