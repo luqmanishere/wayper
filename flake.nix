@@ -6,12 +6,15 @@
     parts.url = "github:hercules-ci/flake-parts";
     parts.inputs.nixpkgs-lib.follows = "nixpkgs";
     devshell.url = "github:numtide/devshell";
+    rust-overlay.url = "github:oxalica/rust-overlay";
   };
 
   outputs = inputs @ {
     parts,
     nci,
     devshell,
+    rust-overlay,
+    nixpkgs,
     ...
   }:
     parts.lib.mkFlake {inherit inputs;} {
@@ -22,6 +25,7 @@
         pkgs,
         system,
         inputs',
+        lib,
         ...
       }: let
         crateName = "wayper";
@@ -40,16 +44,20 @@
             xorg.libXrandr
           ];
       in {
-        # declare projects
-        # relPath is the relative path of a project to the flake root
-        # TODO: change this to your crate's path
+        # use oxalica/rust-overlay
+        _module.args.pkgs = import nixpkgs {
+          inherit system;
+          overlays = [rust-overlay.overlays.default];
+        };
+
+        # relPath is empty to denote current dir
         nci.projects.${crateName}.relPath = "";
-        # configure crates
+
         nci.crates.${crateName} = {
           # export crate (packages and devshell) in flake outputs
-          # alternatively you can access the outputs and export them yourself (see below)
           export = true;
-          # look at documentation for more options
+
+          # overrides
           overrides = {
             add-inputs.overrideAttrs = old: {
               nativeBuildInputs = (old.nativeBuildInputs or []) ++ [pkgs.wayland-protocols pkgs.makeWrapper];
@@ -59,6 +67,8 @@
               '';
             };
           };
+
+          # dependency overrides
           depsOverrides = {
             add-inputs.overrideAttrs = old: {
               nativeBuildInputs = (old.nativeBuildInputs or []) ++ [pkgs.wayland-protocols];
@@ -67,6 +77,13 @@
           };
         };
 
+        nci.toolchains = {
+          build = {
+            package = pkgs.rust-bin.stable.latest.minimal;
+          };
+        };
+
+        # use numtide/devshell
         devshells.default = with pkgs; {
           motd = ''
             -----------------
@@ -86,10 +103,9 @@
           ];
 
           packages = [
-            cargo
-            rust-analyzer
-            rustc
-            rustfmt
+            (rust-bin.stable.latest.default.override {
+              extensions = ["rust-src" "rust-analyzer"];
+            })
             just
           ];
 
