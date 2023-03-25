@@ -351,6 +351,14 @@ fn handle_stream(
         for (_, surface) in surfaces.lock().unwrap().iter_mut() {
             surface.lock().unwrap().toggle_visiblity();
         }
+    } else if msg == "hide" {
+        for (_, surface) in surfaces.lock().unwrap().iter_mut() {
+            surface.lock().unwrap().hide();
+        }
+    } else if msg == "show" {
+        for (_, surface) in surfaces.lock().unwrap().iter_mut() {
+            surface.lock().unwrap().show();
+        }
     } else {
         write_to_stream(&mut stream, "not implemented".to_string())?;
     }
