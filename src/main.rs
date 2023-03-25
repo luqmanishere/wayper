@@ -185,15 +185,6 @@ fn main() -> Result<()> {
                             Ok(_) => {}
                             Err(e) => {
                                 error!("{e:?}");
-                                if !surface.handle_events() {
-                                    info!("surface will redraw");
-                                    match surface.draw() {
-                                        Ok(_) => {}
-                                        Err(e) => {
-                                            error!("{e:?}");
-                                        }
-                                    };
-                                }
                             }
                         };
                     }

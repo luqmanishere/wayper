@@ -4,7 +4,6 @@ use std::{
     path::PathBuf,
     rc::Rc,
     sync::Arc,
-    time::Instant,
 };
 
 use derivative::Derivative;
