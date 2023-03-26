@@ -26,6 +26,7 @@
         system,
         inputs',
         lib,
+        self',
         ...
       }: let
         crateName = "wayper";
@@ -43,7 +44,7 @@
             xorg.libXi
             xorg.libXrandr
           ];
-      in {
+      in rec {
         # use oxalica/rust-overlay
         _module.args.pkgs = import nixpkgs {
           inherit system;
@@ -131,7 +132,9 @@
         # export overlay using easyOverlays
         overlayAttrs = {
           inherit (config.packages) wayper;
+          /*
           inherit (inputs.rust-overlay.overlays) default;
+          */
         };
         packages.wayper = crateOutputs.packages.release;
       };
