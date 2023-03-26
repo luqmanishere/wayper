@@ -131,6 +131,7 @@
         # export overlay using easyOverlays
         overlayAttrs = {
           inherit (config.packages) wayper;
+          inherit (inputs.rust-overlay.overlays) default;
         };
         packages.wayper = crateOutputs.packages.release;
       };
