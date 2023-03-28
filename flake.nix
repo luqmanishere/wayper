@@ -78,11 +78,13 @@
           };
         };
 
+        /*
         nci.toolchains = {
           build = {
             package = pkgs.rust-bin.stable.latest.minimal;
           };
         };
+        */
 
         # use numtide/devshell
         devshells.default = with pkgs; {
