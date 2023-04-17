@@ -125,6 +125,18 @@
               help = "Run ${crateName} (release build)";
               category = "Run";
             }
+            {
+              name = "build-${crateName}";
+              command = "RUST_LOG=debug nix build .#${crateName}-dev";
+              help = "Build ${crateName} (debug build)";
+              category = "Build";
+            }
+            {
+              name = "build-${crateName}-rel";
+              command = "RUST_LOG=debug nix build .#${crateName}-rel";
+              help = "Build ${crateName} (release build)";
+              category = "Build";
+            }
           ];
         };
 
