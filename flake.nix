@@ -163,5 +163,11 @@
         };
         packages.wayper = crateOutputs.packages.release;
       };
+      flake = {
+        homeManagerModules = {
+          wayper = import ./nix/hm-module.nix inputs.self;
+          default = inputs.self.homeManagerModules.wayper;
+        };
+      };
     };
 }
