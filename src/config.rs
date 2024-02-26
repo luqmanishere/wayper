@@ -1,23 +1,22 @@
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
 use eyre::{eyre, Result};
 use serde::Deserialize;
 
 #[derive(Deserialize, Clone, Debug, Default)]
-pub struct Config {
+pub struct WayperConfig {
     #[serde(flatten)]
-    pub outputs: HashMap<String, Arc<OutputConfig>>,
+    pub outputs: HashMap<String, OutputConfig>,
     #[serde(skip, default)]
     pub reload: bool,
     #[serde(skip, default)]
     pub path: Option<PathBuf>,
 }
 
-impl Config {
+impl WayperConfig {
     pub fn load(path: &Path) -> Result<Self> {
         let mut config: Self = toml::from_str(&std::fs::read_to_string(path)?)?;
         config.path = Some(path.into());
@@ -34,17 +33,27 @@ impl Config {
         Ok(())
     }
 
+    pub fn get_output_config(&mut self, name: &str) -> Result<OutputConfig> {
+        Ok(self
+            .outputs
+            .get(name)
+            .ok_or_else(|| eyre!("Can't find config for that output"))?
+            .clone())
+    }
+
+    /*
     pub fn get_output_config(&mut self, name: &str) -> Result<Arc<OutputConfig>> {
         Ok(Arc::clone(self.outputs.get(name).ok_or_else(|| {
             eyre!("Can't find config for that output")
         })?))
     }
+    */
 }
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct OutputConfig {
     pub name: Option<String>,
-    pub duration: Option<i32>,
+    pub duration: Option<u64>,
     pub path: Option<PathBuf>,
 }
 

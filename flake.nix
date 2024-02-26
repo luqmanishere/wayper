@@ -52,39 +52,45 @@
         };
 
         # relPath is empty to denote current dir
-        nci.projects.${crateName}.relPath = "";
+        nci.projects.${crateName}.path = ./.;
 
         nci.crates.${crateName} = {
           # export crate (packages and devshell) in flake outputs
           export = true;
 
           # overrides
-          overrides = {
-            add-inputs.overrideAttrs = old: {
-              nativeBuildInputs = (old.nativeBuildInputs or []) ++ [pkgs.wayland-protocols pkgs.makeWrapper];
-              buildInputs = (old.buildInputs or []) ++ [pkgs.pkg-config pkgs.openssl.dev pkgs.openssl pkgs.perl];
-              postInstall = ''
-                wrapProgram "$out/bin/wayper" --prefix LD_LIBRARY_PATH : "${libPath}"
-              '';
+          drvConfig = {
+            mkDerivation = {
+              nativeBuildInputs = [pkgs.wayland-protocols pkgs.makeWrapper];
+              buildInputs = [pkgs.pkg-config pkgs.openssl.dev pkgs.openssl pkgs.perl];
+              # postInstall = ''
+              #   wrapProgram "$out/bin/wayper" --prefix LD_LIBRARY_PATH : "${libPath}"
+              # '';
             };
           };
 
           # dependency overrides
-          depsOverrides = {
-            add-inputs.overrideAttrs = old: {
-              nativeBuildInputs = (old.nativeBuildInputs or []) ++ [pkgs.wayland-protocols];
-              buildInputs = (old.buildInputs or []) ++ [pkgs.pkg-config pkgs.openssl.dev pkgs.openssl pkgs.perl];
+          depsDrvConfig = {
+            mkDerivation = {
+              nativeBuildInputs = [pkgs.wayland-protocols pkgs.libxkbcommon];
+              buildInputs = [pkgs.pkg-config pkgs.openssl.dev pkgs.openssl pkgs.perl];
             };
           };
+          runtimeLibs = with pkgs; [
+            libGL
+            libxkbcommon
+            wayland
+            xorg.libX11
+            xorg.libXcursor
+            xorg.libXi
+            xorg.libXrandr
+          ];
         };
 
-        /*
         nci.toolchains = {
-          build = {
-            package = pkgs.rust-bin.stable.latest.minimal;
-          };
+          build =
+            pkgs.rust-bin.stable.latest.minimal;
         };
-        */
 
         # use numtide/devshell
         devshells.default = with pkgs; {
@@ -103,6 +109,10 @@
               name = "LD_LIBRARY_PATH";
               value = libPath;
             }
+            {
+              name = "PKG_CONFIG_PATH";
+              value = "${pkgs.libxkbcommon.dev}/lib/pkgconfig";
+            }
           ];
 
           packages = [
@@ -110,6 +120,7 @@
               extensions = ["rust-src" "rust-analyzer"];
             })
             just
+            pkg-config
           ];
 
           commands = [

@@ -1,81 +1,33 @@
-use std::{
-    collections::HashMap,
-    io::{Read, Write},
-    os::unix::net::{UnixListener, UnixStream},
-    path::Path,
-    sync::{Arc, Mutex},
-};
+use std::{collections::HashMap, path::Path, time::Duration};
 
-use eyre::{eyre, Context, Result};
+use eyre::Result;
 use smithay_client_toolkit::{
-    default_environment,
-    environment::SimpleGlobal,
-    new_default_environment,
-    output::{with_output_info, OutputInfo},
+    compositor::CompositorState,
+    output::OutputState,
     reexports::{
-        calloop::{
-            self,
-            channel::{Channel, Sender},
-            LoopHandle, RegistrationToken,
-        },
-        client::protocol::wl_output,
-        protocols::wlr::unstable::layer_shell::v1::client::zwlr_layer_shell_v1,
+        calloop::EventLoop,
+        client::{globals::registry_queue_init, Connection, WaylandSource},
     },
-    WaylandSource,
+    registry::RegistryState,
+    shell::wlr_layer::LayerShell,
+    shm::Shm,
 };
-use tracing::{debug, error, info};
+use tracing::info;
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{filter, fmt, prelude::__tracing_subscriber_SubscriberExt, Layer};
-
-use crate::surface::WallSurface;
+use tracing_subscriber::{
+    filter, fmt, prelude::__tracing_subscriber_SubscriberExt, Layer as TLayer,
+};
+use wallpaperhandler::Wayper;
 
 mod config;
-mod surface;
-
-/*
-struct Env {
-    compositor: SimpleGlobal<WlCompositor>,
-    outputs: OutputHandler,
-    shm: ShmHandler,
-    xdg_output: XdgOutputHandler,
-    layer_shell: SimpleGlobal<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
-}
-
-environment!(Env,
-    singles = [
-        WlCompositor => compositor,
-        WlShm => shm,
-        zwlr_layer_shell_v1::ZwlrLayerShellV1 => layer_shell,
-        zxdg_output_manager_v1::ZxdgOutputManagerV1 => xdg_output,
-    ],
-    multis = [
-        WlOutput => outputs,
-    ]
-);
-        */
-
-// FIXME: properly use eyre and remove unwraps
-default_environment!(Env,
-    fields = [
-        layer_shell: SimpleGlobal<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
-    ],
-    singles = [
-        zwlr_layer_shell_v1::ZwlrLayerShellV1 => layer_shell
-    ],
-);
-
-#[allow(dead_code)]
-pub struct LoopState {
-    handle: LoopHandle<'static, Self>,
-    timer_token: Arc<Mutex<HashMap<String, RegistrationToken>>>,
-    surfaces: Arc<Mutex<Vec<(u32, Arc<Mutex<WallSurface>>)>>>,
-    socket_counter: u64,
-}
+// mod surface;
+mod wallpaperhandler;
 
 fn start_logging() -> Vec<WorkerGuard> {
     let mut guards = Vec::new();
-    let file_appender = tracing_appender::rolling::daily("/tmp/wayper", "log");
+    let file_appender = tracing_appender::rolling::never("/tmp/wayper", "wayper-log");
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+    // tracing_appender::non_blocking::NonBlockingBuilder
     guards.push(guard);
 
     let subscriber = tracing_subscriber::registry()
@@ -83,10 +35,11 @@ fn start_logging() -> Vec<WorkerGuard> {
             fmt::Layer::new()
                 .with_writer(non_blocking)
                 .with_ansi(false)
-                .with_timer(tracing_subscriber::fmt::time::time())
+                // .with_timer(tracing_subscriber::fmt::time::time())
                 .with_filter(
                     filter::EnvFilter::builder()
-                        .with_default_directive(filter::LevelFilter::INFO.into())
+                        .with_env_var("RUST_LOG")
+                        .with_default_directive(filter::LevelFilter::DEBUG.into())
                         .from_env_lossy(),
                 ),
         )
@@ -104,10 +57,52 @@ fn start_logging() -> Vec<WorkerGuard> {
 
 fn main() -> Result<()> {
     let _guards = start_logging();
-    let (env, display, queue) =
-        new_default_environment!(Env, fields = [layer_shell: SimpleGlobal::new(),])
-            .expect("Initial roundtrip failed!");
+    let config_path = Path::new("/home/luqman/.config/wayper/config.toml");
+    let config = crate::config::WayperConfig::load(config_path)?;
 
+    let conn = Connection::connect_to_env().expect("in a wayland session");
+    let (globals, queue) = registry_queue_init(&conn).expect("event queue is initialized");
+    let qh = queue.handle();
+    let mut event_loop: EventLoop<Wayper> =
+        EventLoop::try_new().expect("failed to initalize event_loop");
+    let loop_handle = event_loop.handle();
+    WaylandSource::new(queue)
+        .unwrap()
+        .insert(loop_handle)
+        .unwrap();
+
+    let compositor = CompositorState::bind(&globals, &qh).expect("wl_compositor is not available");
+    let layer_shell = LayerShell::bind(&globals, &qh).expect("layer shell is not available");
+    let shm = Shm::bind(&globals, &qh).expect("wl_shm is not available");
+    let output_state = OutputState::new(&globals, &qh);
+
+    let mut data = wallpaperhandler::Wayper {
+        compositor_state: compositor,
+        registry_state: RegistryState::new(&globals),
+        output_state,
+        layer_shell,
+        shm,
+        outputs: None,
+        config,
+        c_queue_handle: event_loop.handle(),
+        timer_tokens: HashMap::new(),
+    };
+
+    loop {
+        event_loop
+            .dispatch(Duration::from_millis(30), &mut data)
+            .expect("no breaking");
+
+        if data.outputs.is_some() {
+            //
+        }
+    }
+    /*
+    let _guards = start_logging();
+    let conn = Connection::connect_to_env().expect("in a wayland env");
+
+    let display = conn.display();
+    let queue = conn.new_event_queue();
     let config_path = Path::new("/home/luqman/.config/wayper/config.toml");
     let config = Arc::new(Mutex::new(crate::config::Config::load(config_path)?));
 
@@ -321,9 +316,10 @@ fn main() -> Result<()> {
     };
     event_loop.run(None, &mut state, |_shared_data| {})?;
 
-    Ok(())
+        */
 }
 
+/*
 #[tracing::instrument(skip_all, fields(counter = _counter))]
 fn handle_stream(
     _counter: u64,
@@ -376,3 +372,4 @@ fn write_to_stream(stream: &mut UnixStream, mut s: String) -> Result<()> {
     debug!("wrote to stream: {}", s.trim());
     Ok(())
 }
+*/
