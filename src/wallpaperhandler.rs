@@ -194,6 +194,19 @@ impl CompositorHandler for Wayper {
         debug!("{:?} - {}", surface, time);
         self.draw();
     }
+
+    fn transform_changed(
+        &mut self,
+        _conn: &client::Connection,
+        _qh: &QueueHandle<Self>,
+        surface: &client::protocol::wl_surface::WlSurface,
+        new_transform: client::protocol::wl_output::Transform,
+    ) {
+        debug!(
+            "{:?} - received new transform - {:?}",
+            surface, new_transform
+        );
+    }
 }
 
 impl OutputHandler for Wayper {

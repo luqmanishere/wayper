@@ -15,7 +15,7 @@ path = "src/wayperctl.rs"
 
 [dependencies]
 eyre = "0.6"
-smithay-client-toolkit = "0.17"
+smithay-client-toolkit = "0.18"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = [
   "env-filter",
@@ -30,12 +30,12 @@ tracing-appender = "0.2"
 walkdir = "2"
 mime_guess = "2"
 mime = "0.3"
-toml = "0.7"
+toml = "0.8"
 serde = { version = "1", features = ["derive", "rc"] }
 derivative = "2.2.0"
 rand = "0.8"
 notify = "6"
-notify-debouncer-mini = "0.3"
+notify-debouncer-mini = "0.4"
 clap = "4"
 
 [profile.dev.package]

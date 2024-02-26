@@ -6,7 +6,8 @@ use smithay_client_toolkit::{
     output::OutputState,
     reexports::{
         calloop::EventLoop,
-        client::{globals::registry_queue_init, Connection, WaylandSource},
+        calloop_wayland_source::WaylandSource,
+        client::{globals::registry_queue_init, Connection},
     },
     registry::RegistryState,
     shell::wlr_layer::LayerShell,
@@ -66,8 +67,7 @@ fn main() -> Result<()> {
     let mut event_loop: EventLoop<Wayper> =
         EventLoop::try_new().expect("failed to initalize event_loop");
     let loop_handle = event_loop.handle();
-    WaylandSource::new(queue)
-        .unwrap()
+    WaylandSource::new(conn.clone(), queue)
         .insert(loop_handle)
         .unwrap();
 
