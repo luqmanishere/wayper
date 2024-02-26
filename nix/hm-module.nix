@@ -4,7 +4,7 @@ self: {
   lib,
   ...
 }: let
-  # inherit (builtins) toString;
+  inherit (builtins) toString;
   inherit (lib.types) int str package listOf submodule;
   inherit (lib.modules) mkIf;
   inherit (lib.options) mkOption mkEnableOption;
@@ -51,7 +51,7 @@ in {
       ${builtins.concatStringsSep "\n" (map (monitor: ''
           [${monitor.name}]
           name = "${monitor.name}"
-          duration = ${monitor.duration}
+          duration = ${toString monitor.duration}
           path = "${monitor.path}"
         '')
         cfg.monitorConfigs)}
