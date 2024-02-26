@@ -8,9 +8,10 @@ self: {
   inherit (lib.types) int str package listOf submodule;
   inherit (lib.modules) mkIf;
   inherit (lib.options) mkOption mkEnableOption;
-  cfg = config.programs.wayper;
+  inherit (lib.meta) getExe;
+  cfg = config.services.wayper;
 in {
-  options.programs.wayper = {
+  options.services.wayper = {
     enable = mkEnableOption "Wayper, the homebrewed wallpaper daemon";
     package = mkOption {
       description = "The wayper package";
@@ -53,5 +54,21 @@ in {
         '')
         cfg.monitorConfigs)}
     '';
+    systemd.user.services.wayper = {
+      Unit = {
+        Description = "Wayland wallpaper setter";
+        After = ["graphical-session.target"];
+      };
+
+      Service = {
+        # ExecStart = "${cfg.package}/bin/wayper";
+        ExecStart = "${getExe cfg.package}";
+        Restart = "on-failure";
+      };
+
+      Install = {
+        WantedBy = ["default.target"];
+      };
+    };
   };
 }
