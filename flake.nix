@@ -61,7 +61,7 @@
           # overrides
           drvConfig = {
             mkDerivation = {
-              nativeBuildInputs = [pkgs.wayland-protocols pkgs.makeWrapper];
+              nativeBuildInputs = [pkgs.wayland-protocols pkgs.makeWrapper pkgs.libxkbcommon];
               buildInputs = [pkgs.pkg-config pkgs.openssl.dev pkgs.openssl pkgs.perl];
               # postInstall = ''
               #   wrapProgram "$out/bin/wayper" --prefix LD_LIBRARY_PATH : "${libPath}"
