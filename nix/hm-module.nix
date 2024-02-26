@@ -66,6 +66,7 @@ in {
         # ExecStart = "${cfg.package}/bin/wayper";
         ExecStart = "${getExe cfg.package}";
         Restart = "on-failure";
+        RestartSec = 3;
       };
 
       Install = {
