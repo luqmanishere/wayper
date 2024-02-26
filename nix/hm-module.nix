@@ -4,7 +4,7 @@ self: {
   lib,
   ...
 }: let
-  inherit (builtins) toString;
+  # inherit (builtins) toString;
   inherit (lib.types) int str package listOf submodule;
   inherit (lib.modules) mkIf;
   inherit (lib.options) mkOption mkEnableOption;
@@ -22,20 +22,22 @@ in {
     monitorConfigs = mkOption {
       description = "list of monitors with their respective configuration";
       type = listOf (submodule {
-        name = mkOption {
-          description = "the name of the monitor";
-          type = str;
-          default = "eDP-1";
-        };
-        duration = mkOption {
-          description = "the interval between wallpaper cycling (will be ignored if only one file is given)";
-          type = int;
-          default = 30;
-        };
-        path = mkOption {
-          description = "path to wallpaper file(s)";
-          type = str;
-          default = "/home/example/wallpapers";
+        options = {
+          name = mkOption {
+            description = "the name of the monitor";
+            type = str;
+            default = "eDP-1";
+          };
+          duration = mkOption {
+            description = "the interval between wallpaper cycling (will be ignored if only one file is given)";
+            type = int;
+            default = 30;
+          };
+          path = mkOption {
+            description = "path to wallpaper file(s)";
+            type = str;
+            default = "/home/example/wallpapers";
+          };
         };
       });
       default = [{}];
