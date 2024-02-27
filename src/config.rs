@@ -40,14 +40,6 @@ impl WayperConfig {
             .ok_or_else(|| eyre!("Can't find config for that output"))?
             .clone())
     }
-
-    /*
-    pub fn get_output_config(&mut self, name: &str) -> Result<Arc<OutputConfig>> {
-        Ok(Arc::clone(self.outputs.get(name).ok_or_else(|| {
-            eyre!("Can't find config for that output")
-        })?))
-    }
-    */
 }
 
 #[derive(Deserialize, Clone, Debug)]

@@ -31,7 +31,10 @@ use smithay_client_toolkit::{
         },
         WaylandSurface,
     },
-    shm::{slot::SlotPool, Shm, ShmHandler},
+    shm::{
+        slot::{Buffer, SlotPool},
+        Shm, ShmHandler,
+    },
 };
 use tracing::{debug, error, info, instrument, trace, warn};
 use walkdir::WalkDir;
@@ -63,21 +66,124 @@ impl Wayper {
             v.draw().expect("success drawing");
         }
     }
+
+    pub fn add_output(
+        &mut self,
+        _conn: &client::Connection,
+        qh: &client::QueueHandle<Self>,
+        output: client::protocol::wl_output::WlOutput,
+    ) {
+        let output_info = self.output_state.info(&output).expect("get info");
+        let mut outputs_hashmap = if let Some(outputs_hashmap) = self.outputs.take() {
+            outputs_hashmap
+        } else {
+            HashMap::new()
+        };
+
+        let name = output_info.name.clone().expect("output must have name");
+        tracing::Span::current().record("name", &name);
+
+        // if output does not exist we add it
+        if outputs_hashmap.get(&name).is_none() {
+            info!("got new_output {}", name);
+
+            let surface = self.compositor_state.create_surface(&qh);
+            let layer = self.layer_shell.create_layer_surface(
+                &qh,
+                surface.clone(),
+                Layer::Background,
+                Some("wayper"),
+                Some(&output),
+            );
+
+            // additional layer configuration
+            layer.set_layer(Layer::Background);
+            layer.set_size(0, 0);
+            layer.set_exclusive_zone(-1);
+            layer.set_anchor(Anchor::all());
+            layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+
+            // commit the layer
+            layer.commit();
+
+            let pool = SlotPool::new(256 * 256 * 4, &self.shm).expect("Failed to create pool");
+
+            // no config no problem
+            let output_config = match self.config.get_output_config(&name) {
+                Ok(config) => Some(config),
+                Err(e) => {
+                    error!("Unable to get config for output: {e}");
+                    None
+                }
+            };
+
+            let img_list = if let Some(output_config) = output_config.as_ref() {
+                if output_config.path.as_ref().unwrap().is_dir() {
+                    let mut files = WalkDir::new(output_config.path.as_ref().unwrap())
+                        .into_iter()
+                        .filter(|e| {
+                            mime_guess::from_path(e.as_ref().unwrap().path())
+                                .iter()
+                                .any(|ev| ev.type_() == "image")
+                        })
+                        .map(|e| e.unwrap().path().to_owned())
+                        .collect::<Vec<_>>();
+
+                    let mut rng = rand::thread_rng();
+                    files.shuffle(&mut rng);
+                    debug!("{:?}", &files);
+                    files
+                } else {
+                    vec![]
+                }
+            } else {
+                vec![]
+            };
+
+            outputs_hashmap.insert(
+                name.clone(),
+                OutputRepr {
+                    output_name: name.clone(),
+                    wl_repr: output,
+                    qh: qh.clone(),
+                    output_info,
+                    output_config,
+                    dimensions: None,
+                    scale_factor: 1,
+                    pool,
+                    surface: Some(surface),
+                    layer,
+                    buffer: None,
+                    first_configure: true,
+                    img_list,
+                    index: 0,
+                },
+            );
+        } else {
+            info!("we had this output {name} earlier, skipping....");
+        }
+
+        // reassign the hashmap we take (took)
+        self.outputs = Some(outputs_hashmap);
+    }
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct OutputRepr {
     output_name: String,
+    #[allow(dead_code)]
     wl_repr: WlOutput,
     output_info: OutputInfo,
-    output_config: OutputConfig,
+    output_config: Option<OutputConfig>,
     dimensions: Option<(u32, u32)>,
+    #[allow(dead_code)]
     scale_factor: i64,
+    #[allow(dead_code)]
     qh: QueueHandle<Wayper>,
     first_configure: bool,
 
     pool: SlotPool,
+    buffer: Option<Buffer>,
     surface: Option<WlSurface>,
     layer: LayerSurface,
 
@@ -95,7 +201,8 @@ impl OutputRepr {
             .expect("config must have output name")
             == &self.output_name
         {
-            self.output_config = new_config;
+            self.output_config = Some(new_config);
+            self.buffer = None;
 
             info!("received updated config");
         }
@@ -118,15 +225,25 @@ impl OutputRepr {
             )
             .into_rgba8();
 
-        let (buffer, canvas) = self
-            .pool
-            .create_buffer(
-                width as i32,
-                height as i32,
-                stride,
-                wl_shm::Format::Abgr8888,
-            )
-            .expect("create buffer");
+        // check if buffer exists
+        let (buffer, canvas) = if let Some(buffer) = self.buffer.take() {
+            let canvas = self
+                .pool
+                .canvas(&buffer)
+                .expect("a canvas does not exist for this buffer");
+            (buffer, canvas)
+        } else {
+            let (buffer, canvas) = self
+                .pool
+                .create_buffer(
+                    width as i32,
+                    height as i32,
+                    stride,
+                    wl_shm::Format::Abgr8888,
+                )
+                .expect("create buffer");
+            (buffer, canvas)
+        };
 
         // Draw to the window:
         {
@@ -146,9 +263,9 @@ impl OutputRepr {
             .expect("buffer attach");
         self.layer.commit();
 
-        // TODO: save and reuse buffer when the window size is unchanged.  This is especially
-        // useful if you do damage tracking, since you don't need to redraw the undamaged parts
-        // of the canvas.
+        // reuse the buffer created, since
+        self.buffer = Some(buffer);
+
         if self.first_configure == true {
             self.first_configure = false;
         }
@@ -221,90 +338,19 @@ impl OutputHandler for Wayper {
         qh: &client::QueueHandle<Self>,
         output: client::protocol::wl_output::WlOutput,
     ) {
-        let output_info = self.output_state.info(&output).expect("get info");
-        let mut outputs_hashmap = if let Some(outputs_hashmap) = self.outputs.take() {
-            outputs_hashmap
-        } else {
-            HashMap::new()
-        };
-        let name = output_info.name.clone().expect("output must have name");
-        tracing::Span::current().record("name", &name);
-        info!("got new_output");
-
-        let surface = self.compositor_state.create_surface(&qh);
-        let layer = self.layer_shell.create_layer_surface(
-            &qh,
-            surface.clone(),
-            Layer::Background,
-            Some("wayper"),
-            Some(&output),
-        );
-
-        // additional layer configuration
-        layer.set_layer(Layer::Background);
-        layer.set_size(0, 0);
-        layer.set_exclusive_zone(-1);
-        layer.set_anchor(Anchor::all());
-        layer.set_keyboard_interactivity(KeyboardInteractivity::None);
-
-        // commit the layer
-        layer.commit();
-
-        let pool = SlotPool::new(256 * 256 * 4, &self.shm).expect("Failed to create pool");
-
-        let output_config = self
-            .config
-            .get_output_config(&name)
-            .expect(format!("config for display {name} exists").as_str());
-
-        let img_list = if output_config.path.as_ref().unwrap().is_dir() {
-            let mut files = WalkDir::new(output_config.path.as_ref().unwrap())
-                .into_iter()
-                .filter(|e| {
-                    mime_guess::from_path(e.as_ref().unwrap().path())
-                        .iter()
-                        .any(|ev| ev.type_() == "image")
-                })
-                .map(|e| e.unwrap().path().to_owned())
-                .collect::<Vec<_>>();
-
-            let mut rng = rand::thread_rng();
-            files.shuffle(&mut rng);
-            debug!("{:?}", &files);
-            files
-        } else {
-            vec![]
-        };
-
-        outputs_hashmap.insert(
-            name.clone(),
-            OutputRepr {
-                output_name: name.clone(),
-                wl_repr: output,
-                qh: qh.clone(),
-                output_info,
-                output_config,
-                dimensions: None,
-                scale_factor: 1,
-                pool,
-                surface: Some(surface),
-                layer,
-                first_configure: true,
-                img_list,
-                index: 0,
-            },
-        );
-        self.outputs = Some(outputs_hashmap);
-        info!("added new output to map");
+        debug!("received new_output {} on output handler", output.id());
+        self.add_output(_conn, qh, output);
     }
 
     fn update_output(
         &mut self,
-        _conn: &client::Connection,
-        _qh: &client::QueueHandle<Self>,
-        _output: client::protocol::wl_output::WlOutput,
+        conn: &client::Connection,
+        qh: &client::QueueHandle<Self>,
+        output: client::protocol::wl_output::WlOutput,
     ) {
-        unimplemented!("please report this usecase");
+        // TODO: implement this because usecase is found - when an output is added
+        debug!("received update_output for output {}", output.id());
+        self.add_output(conn, qh, output);
     }
 
     fn output_destroyed(
@@ -365,48 +411,54 @@ impl LayerShellHandler for Wayper {
                 .id()
                 .protocol_id();
             if surface_prot_id == layer.wl_surface().id().protocol_id() {
-                if v.first_configure {
-                    let output_id = v.output_info.id;
-                    info!("first configure for surface {surface_prot_id}");
-                    v.dimensions = Some(configure.new_size);
-                    v.draw().expect("success draw");
-                    // TODO: set up first timer
-                    let timer = Timer::from_duration(std::time::Duration::from_secs(
-                        v.output_config.duration.unwrap_or(60),
-                    ));
-                    let id = surface_prot_id.clone();
-                    let timer_token = self
-                        .c_queue_handle
-                        .insert_source(timer, move |deadline, _, data| {
-                            trace!("timer reached deadline: {}", deadline.elapsed().as_secs());
-                            for (_, v) in data.outputs.as_mut().expect("has") {
-                                let surface_prot_id = v
-                                    .surface
-                                    .as_ref()
-                                    .expect("surface exists")
-                                    .id()
-                                    .protocol_id();
-                                if surface_prot_id == id {
-                                    //TODO: log failure
-                                    v.draw().expect("draw success");
-                                    return TimeoutAction::ToDuration(
-                                        std::time::Duration::from_secs(
-                                            v.output_config.duration.unwrap_or(60),
-                                        ),
-                                    );
+                // only if there is an output config do we render
+                if let Some(output_config) = v.output_config.clone() {
+                    if v.first_configure {
+                        let output_id = v.output_info.id;
+                        info!("first configure for surface {surface_prot_id}");
+                        v.dimensions = Some(configure.new_size);
+
+                        // first draw
+                        v.draw().expect("success draw");
+                        let timer = Timer::from_duration(std::time::Duration::from_secs(
+                            output_config.duration.unwrap_or(60),
+                        ));
+                        let id = surface_prot_id.clone();
+                        let timer_token = self
+                            .c_queue_handle
+                            .insert_source(timer, move |deadline, _, data| {
+                                trace!("timer reached deadline: {}", deadline.elapsed().as_secs());
+                                for (_, v) in data.outputs.as_mut().expect("has") {
+                                    let surface_prot_id = v
+                                        .surface
+                                        .as_ref()
+                                        .expect("surface exists")
+                                        .id()
+                                        .protocol_id();
+                                    if surface_prot_id == id {
+                                        //TODO: log failure
+                                        v.draw().expect("draw success");
+                                        return TimeoutAction::ToDuration(
+                                            std::time::Duration::from_secs(
+                                                output_config.duration.unwrap_or(60),
+                                            ),
+                                        );
+                                    }
                                 }
-                            }
-                            return TimeoutAction::ToDuration(std::time::Duration::from_secs(60));
-                        })
-                        .expect("works");
-                    self.timer_tokens.insert(output_id, timer_token);
-                    // TODO: watch dir to update config
-                } else if !v.first_configure && v.dimensions != Some(configure.new_size) {
-                    warn!("received configure event, screen size changed");
-                    v.dimensions = Some(configure.new_size);
-                    v.draw().expect("success draw");
-                } else if !v.first_configure && v.dimensions == Some(configure.new_size) {
-                    warn!("received configure event, no size changes")
+                                return TimeoutAction::ToDuration(std::time::Duration::from_secs(
+                                    60,
+                                ));
+                            })
+                            .expect("works");
+                        self.timer_tokens.insert(output_id, timer_token);
+                        // TODO: watch dir to update config
+                    } else if !v.first_configure && v.dimensions != Some(configure.new_size) {
+                        warn!("received configure event, screen size changed");
+                        v.dimensions = Some(configure.new_size);
+                        v.draw().expect("success draw");
+                    } else if !v.first_configure && v.dimensions == Some(configure.new_size) {
+                        warn!("received configure event, no size changes")
+                    }
                 }
             }
         }

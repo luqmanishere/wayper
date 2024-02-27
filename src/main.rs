@@ -57,10 +57,17 @@ fn start_logging() -> Vec<WorkerGuard> {
 }
 
 fn main() -> Result<()> {
+    // logging setup
     let _guards = start_logging();
+    // config setup
+    #[cfg(not(debug_assertions))]
     let config_path = Path::new("/home/luqman/.config/wayper/config.toml");
+
+    #[cfg(debug_assertions)]
+    let config_path = Path::new("./samples/test_config.toml");
     let config = crate::config::WayperConfig::load(config_path)?;
 
+    // wayland env connection
     let conn = Connection::connect_to_env().expect("in a wayland session");
     let (globals, queue) = registry_queue_init(&conn).expect("event queue is initialized");
     let qh = queue.handle();
@@ -98,30 +105,8 @@ fn main() -> Result<()> {
         }
     }
     /*
-    let _guards = start_logging();
-    let conn = Connection::connect_to_env().expect("in a wayland env");
-
-    let display = conn.display();
-    let queue = conn.new_event_queue();
-    let config_path = Path::new("/home/luqman/.config/wayper/config.toml");
-    let config = Arc::new(Mutex::new(crate::config::Config::load(config_path)?));
-
-    let surfaces = Arc::new(Mutex::new(Vec::new()));
-
-    let layer_shell = env.require_global::<zwlr_layer_shell_v1::ZwlrLayerShellV1>();
-
-    // create calloop event loop
-    let mut event_loop = calloop::EventLoop::<LoopState>::try_new().unwrap();
-    WaylandSource::new(queue)
-        .quick_insert(event_loop.handle())
-        .unwrap();
     let timer_token_hashmap = Arc::new(Mutex::new(HashMap::new()));
 
-    let env_handle = env.clone();
-    let surfaces_handle = Arc::clone(&surfaces);
-    let config_handle = Arc::clone(&config);
-    let display_handle = display.clone();
-    let event_loop_handle = event_loop.handle();
     let timer_token_hashmap_handle = timer_token_hashmap.clone();
     // TODO: use ids instead of name
     let output_handler = move |output: wl_output::WlOutput, info: &OutputInfo| {

@@ -49,6 +49,8 @@
         _module.args.pkgs = import nixpkgs {
           inherit system;
           overlays = [rust-overlay.overlays.default];
+          config.allowUnfree = true;
+          config.permittedInsecurePackages = ["tightvnc-1.3.10"];
         };
 
         # relPath is empty to denote current dir
@@ -101,14 +103,10 @@
             $(type -p menu &>/dev/null && menu)
           '';
           env = [
-            {
-              name = "RUST_SRC_PATH";
-              value = rustPlatform.rustLibSrc;
-            }
-            {
-              name = "LD_LIBRARY_PATH";
-              value = libPath;
-            }
+            # {
+            #   name = "LD_LIBRARY_PATH";
+            #   value = libPath;
+            # }
             {
               name = "PKG_CONFIG_PATH";
               value = "${pkgs.libxkbcommon.dev}/lib/pkgconfig";
@@ -121,32 +119,45 @@
             })
             just
             pkg-config
+            tightvnc
+            wayvnc
+            ripgrep
           ];
+
+          packagesFrom = [crateOutputs.packages.release];
 
           commands = [
             {
-              name = "run-${crateName}";
+              name = "nix-run-${crateName}";
               command = "RUST_LOG=debug nix run .#${crateName}-dev";
               help = "Run ${crateName} (debug build)";
               category = "Run";
             }
             {
-              name = "run-${crateName}-rel";
+              name = "nix-run-${crateName}-rel";
               command = "RUST_LOG=debug nix run .#${crateName}-rel";
               help = "Run ${crateName} (release build)";
               category = "Run";
             }
             {
-              name = "build-${crateName}";
+              name = "nix-build-${crateName}";
               command = "RUST_LOG=debug nix build .#${crateName}-dev";
               help = "Build ${crateName} (debug build)";
               category = "Build";
             }
             {
-              name = "build-${crateName}-rel";
+              name = "nix-build-${crateName}-rel";
               command = "RUST_LOG=debug nix build .#${crateName}-rel";
               help = "Build ${crateName} (release build)";
               category = "Build";
+            }
+            {
+              name = "headless";
+              command = ''
+                #!/usr/bin/env bash
+
+                 hyprctl monitors | rg HEADLESS | cut -d ' ' -f 2
+              '';
             }
           ];
         };
