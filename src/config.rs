@@ -17,6 +17,7 @@ pub struct WayperConfig {
 }
 
 impl WayperConfig {
+    /// Load config from the specified path. Returns `Self`
     pub fn load(path: &Path) -> Result<Self> {
         let mut config: Self = toml::from_str(&std::fs::read_to_string(path)?)?;
         config.path = Some(path.into());
@@ -42,11 +43,16 @@ impl WayperConfig {
     }
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Clone, Debug, Default)]
 pub struct OutputConfig {
+    /// the name of the output, even though its redundant
     pub name: Option<String>,
+    /// duration in between image switching
     pub duration: Option<u64>,
+    /// path to files
     pub path: Option<PathBuf>,
+    /// play videos found in folder
+    pub animated: bool,
 }
 
 impl OutputConfig {

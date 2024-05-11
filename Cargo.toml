@@ -32,11 +32,15 @@ mime_guess = "2"
 mime = "0.3"
 toml = "0.8"
 serde = { version = "1", features = ["derive", "rc"] }
+impl-tools = "0.10"
 derivative = "2.2.0"
 rand = "0.8"
 notify = "6"
 notify-debouncer-mini = "0.4"
 clap = "4"
+video-rs = { version = "0.6", features = ["ndarray"] }
+ndarray = "0.15"
+libmpv = { git = "https://github.com/anlumo/libmpv-rs" }
 
 [profile.dev.package]
 # image runs too slow in debug builds. opt-level 3 helps a bit

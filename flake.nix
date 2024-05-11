@@ -24,9 +24,7 @@
         config,
         pkgs,
         system,
-        inputs',
         lib,
-        self',
         ...
       }: let
         crateName = "wayper";
@@ -63,7 +61,7 @@
           # overrides
           drvConfig = {
             mkDerivation = {
-              nativeBuildInputs = [pkgs.wayland-protocols pkgs.makeWrapper pkgs.libxkbcommon];
+              nativeBuildInputs = [pkgs.wayland-protocols pkgs.makeWrapper pkgs.libxkbcommon pkgs.ffmpeg];
               buildInputs = [pkgs.pkg-config pkgs.openssl.dev pkgs.openssl pkgs.perl];
               # postInstall = ''
               #   wrapProgram "$out/bin/wayper" --prefix LD_LIBRARY_PATH : "${libPath}"
@@ -74,7 +72,7 @@
           # dependency overrides
           depsDrvConfig = {
             mkDerivation = {
-              nativeBuildInputs = [pkgs.wayland-protocols pkgs.libxkbcommon];
+              nativeBuildInputs = [pkgs.wayland-protocols pkgs.libxkbcommon pkgs.ffmpeg];
               buildInputs = [pkgs.pkg-config pkgs.openssl.dev pkgs.openssl pkgs.perl];
             };
           };
@@ -109,7 +107,11 @@
             # }
             {
               name = "PKG_CONFIG_PATH";
-              value = "${pkgs.libxkbcommon.dev}/lib/pkgconfig";
+              value = "${pkgs.libxkbcommon.dev}/lib/pkgconfig:${pkgs.ffmpeg.dev}/lib/pkgconfig";
+            }
+            {
+              name = "LIBCLANG_PATH";
+              value = "${pkgs.llvmPackages.libclang.lib}/lib";
             }
           ];
 
@@ -159,6 +161,12 @@
                  hyprctl monitors | rg HEADLESS | cut -d ' ' -f 2
               '';
             }
+            {
+              name = "tail-log";
+              command = "tail -f /tmp/wayper/wayper-log";
+              help = "tail the ${crateName} logfile";
+              category = "Utilities";
+            }
           ];
         };
 
@@ -173,6 +181,7 @@
           */
         };
         packages.wayper = crateOutputs.packages.release;
+        packages.wayper-dev = crateOutputs.packages.dev;
       };
       flake = {
         homeManagerModules = {

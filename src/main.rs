@@ -59,6 +59,7 @@ fn start_logging() -> Vec<WorkerGuard> {
 fn main() -> Result<()> {
     // logging setup
     let _guards = start_logging();
+    video_rs::init().unwrap();
     // config setup
     #[cfg(not(debug_assertions))]
     let config_path = Path::new("/home/luqman/.config/wayper/config.toml");
@@ -89,9 +90,11 @@ fn main() -> Result<()> {
         output_state,
         layer_shell,
         shm,
-        outputs: None,
+        outputs_map: HashMap::new(),
+        layershell_to_outputname: HashMap::new(),
         config,
         c_queue_handle: event_loop.handle(),
+        thread_map: HashMap::new(),
         timer_tokens: HashMap::new(),
     };
 
@@ -99,10 +102,6 @@ fn main() -> Result<()> {
         event_loop
             .dispatch(Duration::from_millis(30), &mut data)
             .expect("no breaking");
-
-        if data.outputs.is_some() {
-            //
-        }
     }
     /*
     let timer_token_hashmap = Arc::new(Mutex::new(HashMap::new()));
