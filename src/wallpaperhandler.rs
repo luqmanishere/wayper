@@ -227,11 +227,22 @@ impl OutputRepr {
 
         // check if buffer exists
         let (buffer, canvas) = if let Some(buffer) = self.buffer.take() {
-            let canvas = self
-                .pool
-                .canvas(&buffer)
-                .expect("a canvas does not exist for this buffer");
-            (buffer, canvas)
+            match self.pool.canvas(&buffer) {
+                Some(canvas) => (buffer, canvas),
+                None => {
+                    warn!("Missing canvas when buffer exists!");
+                    let (buffer, canvas) = self
+                        .pool
+                        .create_buffer(
+                            width as i32,
+                            height as i32,
+                            stride,
+                            wl_shm::Format::Abgr8888,
+                        )
+                        .expect("create buffer");
+                    (buffer, canvas)
+                }
+            }
         } else {
             let (buffer, canvas) = self
                 .pool

@@ -54,7 +54,10 @@
         };
 
         # relPath is empty to denote current dir
-        nci.projects.${crateName}.path = ./.;
+        nci.projects.${crateName} = {
+          path = ./.;
+          numtideDevshell = "default";
+        };
 
         nci.crates.${crateName} = {
           # export crate (packages and devshell) in flake outputs
@@ -90,8 +93,7 @@
         };
 
         nci.toolchains = {
-          build =
-            pkgs.rust-bin.stable.latest.minimal;
+          # mkBuild = pkgs
         };
 
         # use numtide/devshell
@@ -114,14 +116,14 @@
           ];
 
           packages = [
-            (rust-bin.stable.latest.default.override {
-              extensions = ["rust-src" "rust-analyzer"];
-            })
+            # (rust-bin.stable.latest.default.override {
+            #   extensions = ["rust-src" "rust-analyzer"];
+            # })
             just
             pkg-config
-            tightvnc
             wayvnc
             ripgrep
+            stdenv
           ];
 
           packagesFrom = [crateOutputs.packages.release];
