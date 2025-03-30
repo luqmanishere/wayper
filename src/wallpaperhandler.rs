@@ -4,7 +4,7 @@ use std::{
     path::PathBuf,
 };
 
-use eyre::Result;
+use color_eyre::Result;
 use image::imageops::FilterType;
 use rand::seq::SliceRandom;
 use smithay_client_toolkit::{
@@ -62,7 +62,7 @@ pub struct Wayper {
 
 impl Wayper {
     pub fn draw(&mut self) {
-        for (_k, v) in self.outputs.as_mut().expect("exists") {
+        for v in self.outputs.as_mut().expect("exists").values_mut() {
             v.draw().expect("success drawing");
         }
     }
@@ -74,22 +74,18 @@ impl Wayper {
         output: client::protocol::wl_output::WlOutput,
     ) {
         let output_info = self.output_state.info(&output).expect("get info");
-        let mut outputs_hashmap = if let Some(outputs_hashmap) = self.outputs.take() {
-            outputs_hashmap
-        } else {
-            HashMap::new()
-        };
+        let mut outputs_hashmap = self.outputs.take().unwrap_or_default();
 
         let name = output_info.name.clone().expect("output must have name");
         tracing::Span::current().record("name", &name);
 
         // if output does not exist we add it
-        if outputs_hashmap.get(&name).is_none() {
+        if !outputs_hashmap.contains_key(&name) {
             info!("got new_output {}", name);
 
-            let surface = self.compositor_state.create_surface(&qh);
+            let surface = self.compositor_state.create_surface(qh);
             let layer = self.layer_shell.create_layer_surface(
-                &qh,
+                qh,
                 surface.clone(),
                 Layer::Background,
                 Some("wayper"),
@@ -129,7 +125,7 @@ impl Wayper {
                         .map(|e| e.unwrap().path().to_owned())
                         .collect::<Vec<_>>();
 
-                    let mut rng = rand::thread_rng();
+                    let mut rng = rand::rng();
                     files.shuffle(&mut rng);
                     debug!("{:?}", &files);
                     files
@@ -218,11 +214,7 @@ impl OutputRepr {
         info!("drawing: {}", path.display());
 
         let image = image::open(&path)?
-            .resize_to_fill(
-                width.try_into().unwrap(),
-                height.try_into().unwrap(),
-                FilterType::Lanczos3,
-            )
+            .resize_to_fill(width, height, FilterType::Lanczos3)
             .into_rgba8();
 
         // check if buffer exists
@@ -277,7 +269,7 @@ impl OutputRepr {
         // reuse the buffer created, since
         self.buffer = Some(buffer);
 
-        if self.first_configure == true {
+        if self.first_configure {
             self.first_configure = false;
         }
         trace!("finish drawing");
@@ -334,6 +326,24 @@ impl CompositorHandler for Wayper {
             "{:?} - received new transform - {:?}",
             surface, new_transform
         );
+    }
+    fn surface_enter(
+        &mut self,
+        _conn: &client::Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &client::protocol::wl_surface::WlSurface,
+        output: &client::protocol::wl_output::WlOutput,
+    ) {
+        info!("surface enter for output {}", output.id());
+    }
+    fn surface_leave(
+        &mut self,
+        _conn: &client::Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &client::protocol::wl_surface::WlSurface,
+        output: &client::protocol::wl_output::WlOutput,
+    ) {
+        info!("surface leave for output {}", output.id());
     }
 }
 
@@ -414,7 +424,7 @@ impl LayerShellHandler for Wayper {
         _serial: u32,
     ) {
         let _id = layer.wl_surface().id().protocol_id();
-        for (_, v) in self.outputs.as_mut().expect("has") {
+        for v in self.outputs.as_mut().expect("has").values_mut() {
             let surface_prot_id = v
                 .surface
                 .as_ref()
@@ -434,12 +444,12 @@ impl LayerShellHandler for Wayper {
                         let timer = Timer::from_duration(std::time::Duration::from_secs(
                             output_config.duration.unwrap_or(60),
                         ));
-                        let id = surface_prot_id.clone();
+                        let id = surface_prot_id;
                         let timer_token = self
                             .c_queue_handle
                             .insert_source(timer, move |deadline, _, data| {
                                 trace!("timer reached deadline: {}", deadline.elapsed().as_secs());
-                                for (_, v) in data.outputs.as_mut().expect("has") {
+                                for v in data.outputs.as_mut().expect("has").values_mut() {
                                     let surface_prot_id = v
                                         .surface
                                         .as_ref()
@@ -456,9 +466,7 @@ impl LayerShellHandler for Wayper {
                                         );
                                     }
                                 }
-                                return TimeoutAction::ToDuration(std::time::Duration::from_secs(
-                                    60,
-                                ));
+                                TimeoutAction::ToDuration(std::time::Duration::from_secs(60))
                             })
                             .expect("works");
                         self.timer_tokens.insert(output_id, timer_token);

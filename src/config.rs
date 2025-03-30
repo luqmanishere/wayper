@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use eyre::{eyre, Result};
+use color_eyre::{eyre::eyre, Result};
 use serde::Deserialize;
 
 #[derive(Deserialize, Clone, Debug, Default)]

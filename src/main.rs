@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::Path, time::Duration};
 
-use eyre::Result;
+use color_eyre::Result;
 use smithay_client_toolkit::{
     compositor::CompositorState,
     output::OutputState,
@@ -57,6 +57,8 @@ fn start_logging() -> Vec<WorkerGuard> {
 }
 
 fn main() -> Result<()> {
+    color_eyre::install()?;
+
     // logging setup
     let _guards = start_logging();
     // config setup

@@ -1,100 +1,64 @@
 {
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
-    nci.url = "github:yusdacra/nix-cargo-integration";
-    nci.inputs.nixpkgs.follows = "nixpkgs";
-    parts.url = "github:hercules-ci/flake-parts";
-    parts.inputs.nixpkgs-lib.follows = "nixpkgs";
+    parts = {
+      url = "github:hercules-ci/flake-parts";
+      inputs.nixpkgs-lib.follows = "nixpkgs";
+    };
     devshell.url = "github:numtide/devshell";
-    rust-overlay.url = "github:oxalica/rust-overlay";
+    naersk.url = "github:nix-community/naersk";
+    fenix = {
+      url = "github:nix-community/fenix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = inputs @ {
     parts,
-    nci,
     devshell,
-    rust-overlay,
     nixpkgs,
+    naersk,
+    fenix,
     ...
   }:
     parts.lib.mkFlake {inherit inputs;} {
       systems = ["x86_64-linux" "aarch64-linux"];
-      imports = [nci.flakeModule parts.flakeModules.easyOverlay devshell.flakeModule];
+      imports = [parts.flakeModules.easyOverlay devshell.flakeModule];
       perSystem = {
         config,
         pkgs,
         system,
-        inputs',
         lib,
-        self',
         ...
       }: let
         crateName = "wayper";
-        # shorthand for accessing this crate's outputs
-        # you can access crate outputs under `config.nci.outputs.<crate name>` (see documentation)
-        crateOutputs = config.nci.outputs.${crateName};
-        libPath = with pkgs;
-          lib.makeLibraryPath
-          [
-            libGL
-            libxkbcommon
-            wayland
-            xorg.libX11
-            xorg.libXcursor
-            xorg.libXi
-            xorg.libXrandr
-          ];
+
+        toolchain = fenix.packages.${system}.stable.toolchain;
+
+        naersk' = pkgs.callPackage naersk {
+          cargo = toolchain;
+          rustc = toolchain;
+        };
+
+        wayper = {release ? true}:
+          naersk'.buildPackage {
+            src = ./.;
+            nativeBuildInputs = with pkgs; [pkg-config];
+            buildInputs = with pkgs; [libxkbcommon mpv];
+            inherit release;
+          };
       in rec {
-        # use oxalica/rust-overlay
         _module.args.pkgs = import nixpkgs {
           inherit system;
-          overlays = [rust-overlay.overlays.default];
+          overlays = [fenix.overlays.default];
           config.allowUnfree = true;
           config.permittedInsecurePackages = ["tightvnc-1.3.10"];
         };
 
-        # relPath is empty to denote current dir
-        nci.projects.${crateName} = {
-          path = ./.;
-          numtideDevshell = "default";
-        };
-
-        nci.crates.${crateName} = {
-          # export crate (packages and devshell) in flake outputs
-          export = true;
-
-          # overrides
-          drvConfig = {
-            mkDerivation = {
-              nativeBuildInputs = [pkgs.wayland-protocols pkgs.makeWrapper pkgs.libxkbcommon];
-              buildInputs = [pkgs.pkg-config pkgs.openssl.dev pkgs.openssl pkgs.perl];
-              # postInstall = ''
-              #   wrapProgram "$out/bin/wayper" --prefix LD_LIBRARY_PATH : "${libPath}"
-              # '';
-            };
-          };
-
-          # dependency overrides
-          depsDrvConfig = {
-            mkDerivation = {
-              nativeBuildInputs = [pkgs.wayland-protocols pkgs.libxkbcommon];
-              buildInputs = [pkgs.pkg-config pkgs.openssl.dev pkgs.openssl pkgs.perl];
-            };
-          };
-          runtimeLibs = with pkgs; [
-            libGL
-            libxkbcommon
-            wayland
-            xorg.libX11
-            xorg.libXcursor
-            xorg.libXi
-            xorg.libXrandr
-          ];
-        };
-
-        nci.toolchains = {
-          # mkBuild = pkgs
-        };
+        packages.default = packages.wayper;
+        packages.wayper = packages.release;
+        packages.release = wayper {release = true;};
+        packages.debug = wayper {release = false;};
 
         # use numtide/devshell
         devshells.default = with pkgs; {
@@ -105,13 +69,9 @@
             $(type -p menu &>/dev/null && menu)
           '';
           env = [
-            # {
-            #   name = "LD_LIBRARY_PATH";
-            #   value = libPath;
-            # }
             {
               name = "PKG_CONFIG_PATH";
-              value = "${pkgs.libxkbcommon.dev}/lib/pkgconfig";
+              value = "${pkgs.libxkbcommon.dev}/lib/pkgconfig:${pkgs.wayland.dev}/lib/pkgconfig:${pkgs.mpv}/lib/pkgconfig";
             }
           ];
 
@@ -119,14 +79,14 @@
             # (rust-bin.stable.latest.default.override {
             #   extensions = ["rust-src" "rust-analyzer"];
             # })
+            toolchain
             just
             pkg-config
-            wayvnc
             ripgrep
-            stdenv
+            stdenv.cc
           ];
 
-          packagesFrom = [crateOutputs.packages.release];
+          packagesFrom = [packages.default];
 
           commands = [
             {
@@ -165,7 +125,7 @@
         };
 
         # export the release package of the crate as default package
-        packages.default = crateOutputs.packages.release;
+        # packages.default = crateOutputs.packages.release;
 
         # export overlay using easyOverlays
         overlayAttrs = {
@@ -174,7 +134,6 @@
           inherit (inputs.rust-overlay.overlays) default;
           */
         };
-        packages.wayper = crateOutputs.packages.release;
       };
       flake = {
         homeManagerModules = {

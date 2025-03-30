@@ -14,8 +14,8 @@ name = "wayperctl"
 path = "src/wayperctl.rs"
 
 [dependencies]
-eyre = "0.6"
-smithay-client-toolkit = "0.18"
+color-eyre = "0.6"
+smithay-client-toolkit = { version = "0.19" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = [
   "env-filter",
@@ -23,7 +23,7 @@ tracing-subscriber = { version = "0.3", features = [
   "time",
   "local-time",
 ] }
-image = "0.24"
+image = "0.25"
 timer = "0.2"
 chrono = "0.4"
 tracing-appender = "0.2"
@@ -33,9 +33,9 @@ mime = "0.3"
 toml = "0.8"
 serde = { version = "1", features = ["derive", "rc"] }
 derivative = "2.2.0"
-rand = "0.8"
-notify = "6"
-notify-debouncer-mini = "0.4"
+rand = "0.9"
+notify = "8"
+notify-debouncer-mini = "0.6"
 clap = "4"
 
 [profile.dev.package]

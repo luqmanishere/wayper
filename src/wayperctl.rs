@@ -5,7 +5,7 @@ use std::{
 };
 
 use clap::{ArgMatches, Command};
-use eyre::{eyre, Result, WrapErr};
+use color_eyre::eyre::{eyre, Result, WrapErr};
 use tracing::{info, Level};
 
 fn main() -> Result<()> {
