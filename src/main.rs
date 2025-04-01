@@ -1,11 +1,17 @@
-use std::{collections::HashMap, path::Path, time::Duration};
+use std::{
+    collections::HashMap,
+    os::unix::net::UnixStream,
+    path::Path,
+    sync::{Arc, RwLock},
+    time::Duration,
+};
 
 use color_eyre::Result;
 use smithay_client_toolkit::{
     compositor::CompositorState,
     output::OutputState,
     reexports::{
-        calloop::EventLoop,
+        calloop::{self, EventLoop},
         calloop_wayland_source::WaylandSource,
         client::{globals::registry_queue_init, Connection},
     },
@@ -18,49 +24,19 @@ use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{
     filter, fmt, prelude::__tracing_subscriber_SubscriberExt, Layer as TLayer,
 };
-use wallpaperhandler::Wayper;
+use wallpaperhandler::{OutputRepr, Wayper};
+use wayper::socket::{OutputWallpaper, SocketCommands, SocketError, SocketOutput, WayperSocket};
 
 mod config;
 // mod surface;
 mod wallpaperhandler;
-
-fn start_logging() -> Vec<WorkerGuard> {
-    let mut guards = Vec::new();
-    let file_appender = tracing_appender::rolling::never("/tmp/wayper", "wayper-log");
-    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
-    // tracing_appender::non_blocking::NonBlockingBuilder
-    guards.push(guard);
-
-    let subscriber = tracing_subscriber::registry()
-        .with(
-            fmt::Layer::new()
-                .with_writer(non_blocking)
-                .with_ansi(false)
-                // .with_timer(tracing_subscriber::fmt::time::time())
-                .with_filter(
-                    filter::EnvFilter::builder()
-                        .with_env_var("RUST_LOG")
-                        .with_default_directive(filter::LevelFilter::DEBUG.into())
-                        .from_env_lossy(),
-                ),
-        )
-        .with(
-            fmt::layer()
-                .with_ansi(true)
-                .with_timer(tracing_subscriber::fmt::time::time())
-                .with_filter(filter::LevelFilter::INFO),
-        );
-
-    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
-    info!("logger started!");
-    guards
-}
 
 fn main() -> Result<()> {
     color_eyre::install()?;
 
     // logging setup
     let _guards = start_logging();
+
     // config setup
     #[cfg(not(debug_assertions))]
     let config_path = Path::new("/home/luqman/.config/wayper/config.toml");
@@ -69,7 +45,7 @@ fn main() -> Result<()> {
     let config_path = Path::new("./samples/test_config.toml");
     let config = crate::config::WayperConfig::load(config_path)?;
 
-    // wayland env connection
+    // Get the wayland details from the env, initiate the wayland event source
     let conn = Connection::connect_to_env().expect("in a wayland session");
     let (globals, queue) = registry_queue_init(&conn).expect("event queue is initialized");
     let qh = queue.handle();
@@ -80,10 +56,48 @@ fn main() -> Result<()> {
         .insert(loop_handle)
         .unwrap();
 
+    // setup the wayland client and its handlers
     let compositor = CompositorState::bind(&globals, &qh).expect("wl_compositor is not available");
     let layer_shell = LayerShell::bind(&globals, &qh).expect("layer shell is not available");
     let shm = Shm::bind(&globals, &qh).expect("wl_shm is not available");
     let output_state = OutputState::new(&globals, &qh);
+    let outputs_hashmap_arc: Arc<RwLock<HashMap<String, OutputRepr>>> = Default::default();
+
+    // channel based event source for our socket
+    let (socket_tx, socket_channel) = calloop::channel::channel::<UnixStream>();
+    let mut socket = WayperSocket::new("/tmp/wayper/.socket.sock".into(), socket_tx);
+
+    let outputs_hashmap_handle = outputs_hashmap_arc.clone();
+    // insert the channel receiver as a source in calloop
+    event_loop
+        .handle()
+        .insert_source(socket_channel, move |ev, _, shared_data| {
+            tracing::debug!("stream received from listener");
+            match ev {
+                calloop::channel::Event::Msg(stream) => {
+                    shared_data.socket_counter += 1;
+                    match handle_stream(
+                        shared_data.socket_counter,
+                        stream,
+                        outputs_hashmap_handle.clone(),
+                    ) {
+                        Ok(_) => {
+                            tracing::debug!("stream is handled");
+                        }
+                        Err(e) => {
+                            tracing::error!("error handling stream: {e}");
+                        }
+                    }
+                }
+                calloop::channel::Event::Closed => {
+                    tracing::error!("socket input listener channel is closed!");
+                }
+            }
+        })
+        .unwrap();
+
+    // keep this alive until the end of the program
+    let _socket_listener = socket.socket_sender_thread();
 
     let mut data = wallpaperhandler::Wayper {
         compositor_state: compositor,
@@ -91,108 +105,19 @@ fn main() -> Result<()> {
         output_state,
         layer_shell,
         shm,
-        outputs: None,
+        outputs: outputs_hashmap_arc,
         config,
         c_queue_handle: event_loop.handle(),
         timer_tokens: HashMap::new(),
+        socket_counter: 0,
     };
 
     loop {
         event_loop
-            .dispatch(Duration::from_millis(30), &mut data)
-            .expect("no breaking");
-
-        if data.outputs.is_some() {
-            //
-        }
+            .dispatch(Duration::from_secs(30), &mut data)
+            .expect("event loop doesn't panic");
     }
     /*
-    let timer_token_hashmap = Arc::new(Mutex::new(HashMap::new()));
-
-    let timer_token_hashmap_handle = timer_token_hashmap.clone();
-    // TODO: use ids instead of name
-    let output_handler = move |output: wl_output::WlOutput, info: &OutputInfo| {
-        if info.obsolete {
-            // delete surface
-            surfaces_handle
-                .lock()
-                .unwrap()
-                .retain(|(i, _)| *i != info.id);
-
-            //  release the output
-            output.release();
-
-            // delete the timer associated with the output
-            let mut timer_token_hashmap = { timer_token_hashmap_handle.lock().unwrap() };
-            let token = timer_token_hashmap.remove(&info.name).unwrap();
-            event_loop_handle.remove(token);
-        } else {
-            dbg!(info);
-            // output created, make a new surface for it
-            let surface = env_handle.create_surface().detach();
-            let pool = env_handle
-                .create_auto_pool()
-                .expect("Failed to create a memory pool!");
-            let output_config = {
-                let config_handle = config_handle.lock().unwrap();
-                Arc::clone(
-                    config_handle
-                        .outputs
-                        .get(&info.name)
-                        .ok_or_else(|| eyre!("Can't find config for that output"))
-                        .unwrap(),
-                )
-            };
-            let wall_surface = Arc::new(Mutex::new(WallSurface::new(
-                &output,
-                info,
-                output_config,
-                surface,
-                &layer_shell.clone(),
-                pool,
-            )));
-
-            let name = info.name.clone();
-            let calloop_timer = calloop::timer::Timer::immediate();
-            let display_handle = display_handle.clone();
-            let surface_handle = wall_surface.clone();
-            // insert timer and store its token
-            let timer_token = event_loop_handle
-                .insert_source(calloop_timer, move |deadline, _, _shared_data| {
-                    debug!("calloop timer called for: {:?}", deadline);
-                    let mut surface = surface_handle.lock().unwrap();
-                    if !surface.handle_events() {
-                        info!("surface will redraw");
-                        match surface.draw() {
-                            Ok(_) => {}
-                            Err(e) => {
-                                error!("{e:?}");
-                            }
-                        };
-                    }
-                    display_handle.flush().unwrap();
-
-                    // Set duration of next call
-                    let duration = surface.output_config.duration.unwrap() as u64;
-                    calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_secs(
-                        duration,
-                    ))
-                })
-                .unwrap();
-
-            // store timer tokens
-            (*timer_token_hashmap_handle.lock().unwrap()).insert(name, timer_token);
-            // store handle to surfaces
-            (*surfaces_handle.lock().unwrap()).push((info.id, wall_surface));
-        }
-    };
-
-    // process existing outputs
-    for output in env.get_all_outputs() {
-        if let Some(info) = with_output_info(&output, Clone::clone) {
-            output_handler(output, &info);
-        }
-    }
 
     // Setup a listener for output changes
     // the listener will live for as long as we keep the handle alive
@@ -245,118 +170,120 @@ fn main() -> Result<()> {
             )?;
         }
     }
-
-    let (socket_tx, socket_channel): (Sender<UnixStream>, Channel<UnixStream>) =
-        calloop::channel::channel::<UnixStream>();
-    event_loop
-        .handle()
-        .insert_source(socket_channel, move |ev, _, shared_data| {
-            debug!("stream received from listener");
-            match ev {
-                calloop::channel::Event::Msg(eve) => {
-                    shared_data.socket_counter += 1;
-                    match handle_stream(
-                        shared_data.socket_counter,
-                        eve,
-                        Arc::clone(&shared_data.surfaces),
-                    ) {
-                        Ok(_) => {
-                            debug!("stream is handled");
-                        }
-                        Err(e) => {
-                            error!("error handling stream: {e}");
-                        }
-                    }
-                }
-                calloop::channel::Event::Closed => {}
-            }
-            //
-        })
-        .unwrap();
-    std::thread::spawn(move || -> Result<()> {
-        let socket_path = "/tmp/wayper/.socket.sock";
-        if std::fs::metadata(socket_path).is_ok() {
-            info!("previous socket detected");
-            info!("removing previous socket");
-            std::fs::remove_file(socket_path)
-                .with_context(|| eyre!("could not delete previous socket at {:?}", socket_path))?;
-        }
-        let unix_listener = UnixListener::bind(socket_path)
-            .with_context(|| eyre!("could not create unix socket"))?;
-
-        loop {
-            match unix_listener.accept() {
-                Ok((unix_stream, _)) => socket_tx.send(unix_stream).unwrap(),
-                Err(e) => {
-                    error!("failed accepting connection from unixlistener: {e}");
-                    continue;
-                }
-            }
-        }
-    });
-
-    let mut state = LoopState {
-        handle: event_loop.handle(),
-        timer_token: timer_token_hashmap,
-        surfaces: Arc::clone(&surfaces),
-        socket_counter: 0,
-    };
-    event_loop.run(None, &mut state, |_shared_data| {})?;
-
-        */
+    */
 }
 
-/*
 #[tracing::instrument(skip_all, fields(counter = _counter))]
 fn handle_stream(
     _counter: u64,
     mut stream: UnixStream,
-    surfaces: Arc<Mutex<Vec<(u32, Arc<Mutex<WallSurface>>)>>>,
+    outputs: Arc<RwLock<HashMap<String, OutputRepr>>>,
 ) -> Result<()> {
-    let mut msg = String::new();
-    stream
-        .read_to_string(&mut msg)
-        .context("failed to read the stream")?;
-    debug!("msg received on socket1: {msg}");
+    tracing::debug!("Socket call counter: {_counter}");
+    let command = SocketCommands::from_socket(&mut stream)?;
 
-    if msg == "ping" {
-        write_to_stream(&mut stream, "pong".to_string())?;
-    } else if msg == "current" {
-        for (_, surface) in surfaces.lock().unwrap().iter() {
-            let surface = surface.lock().unwrap();
-            let surface_name = surface.output_info.name.clone();
-            let wallpaper = surface.current_img();
-            write_to_stream(&mut stream, surface_name)?;
-            let wallpaper = format!("{}\n", wallpaper.display());
-            write_to_stream(&mut stream, wallpaper)?;
+    match command {
+        SocketCommands::Ping => {
+            SocketOutput::Message("pong".to_string()).write_to_socket(&mut stream)?;
         }
-    } else if msg == "toggle" {
-        for (_, surface) in surfaces.lock().unwrap().iter_mut() {
-            surface.lock().unwrap().toggle_visiblity();
+        SocketCommands::Current { output_name } => {
+            /// Get the current image for the output and wrap it
+            fn get_output_current_image(
+                output: &OutputRepr,
+            ) -> Result<OutputWallpaper, SocketError> {
+                let output_name = &output.output_name;
+                match output.current_img() {
+                    Some(image_path) => Ok(OutputWallpaper {
+                        output_name: output_name.to_string(),
+                        wallpaper: image_path.display().to_string(),
+                    }),
+                    None => Err(SocketError::NoCurrentImage {
+                        output: output_name.to_string(),
+                    }),
+                }
+            }
+
+            // if output name specified
+            if let Some(output_name) = output_name {
+                match outputs.read().unwrap().get(&output_name) {
+                    Some(output) => match get_output_current_image(output) {
+                        Ok(outwp) => {
+                            SocketOutput::CurrentWallpaper(outwp).write_to_socket(&mut stream)?
+                        }
+                        Err(error) => error.write_to_socket(&mut stream)?,
+                    },
+                    None => SocketError::UnindentifiedOutput { output_name }
+                        .write_to_socket(&mut stream)?,
+                }
+            } else {
+                // i would use iterators here if i could, but i cant figure this out
+                let mut output_wallpapers = vec![];
+                let mut errors = vec![];
+                for output in outputs.read().unwrap().values() {
+                    match get_output_current_image(output) {
+                        Ok(outwp) => output_wallpapers.push(outwp),
+                        Err(error) => errors.push(error),
+                    }
+                }
+                SocketOutput::Wallpapers(output_wallpapers).write_to_socket(&mut stream)?;
+                // TODO: figure out how to send multi frame responses
+                // SocketOutput::MultipleErrors(errors).write_to_socket(&mut stream)?;
+            }
         }
-    } else if msg == "hide" {
-        for (_, surface) in surfaces.lock().unwrap().iter_mut() {
-            surface.lock().unwrap().hide();
+        // TODO: toggle
+        // TODO: hide
+        // TODO: show
+        command => {
+            SocketError::CommandUnimplemented {
+                command: command.to_string(),
+            }
+            .write_to_socket(&mut stream)?;
         }
-    } else if msg == "show" {
-        for (_, surface) in surfaces.lock().unwrap().iter_mut() {
-            surface.lock().unwrap().show();
-        }
-    } else {
-        write_to_stream(&mut stream, "not implemented".to_string())?;
     }
+    // else if msg == "toggle" {
+    //     for (_, surface) in outputs.lock().unwrap().iter_mut() {
+    //         surface.lock().unwrap().toggle_visiblity();
+    //     }
+    // } else if msg == "hide" {
+    //     for (_, surface) in outputs.lock().unwrap().iter_mut() {
+    //         surface.lock().unwrap().hide();
+    //     }
+    // } else if msg == "show" {
+    //     for (_, surface) in outputs.lock().unwrap().iter_mut() {
+    //         surface.lock().unwrap().show();
+    //     }
+    // }
     Ok(())
 }
 
-/// Helper function to write to a unix stream
-fn write_to_stream(stream: &mut UnixStream, mut s: String) -> Result<()> {
-    if !s.ends_with('\n') {
-        s.push('\n');
-    }
-    stream
-        .write(s.as_bytes())
-        .wrap_err("failed to write to stream")?;
-    debug!("wrote to stream: {}", s.trim());
-    Ok(())
+fn start_logging() -> Vec<WorkerGuard> {
+    let mut guards = Vec::new();
+    let file_appender = tracing_appender::rolling::never("/tmp/wayper", "wayper-log");
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+    // tracing_appender::non_blocking::NonBlockingBuilder
+    guards.push(guard);
+
+    let subscriber = tracing_subscriber::registry()
+        .with(
+            fmt::Layer::new()
+                .with_writer(non_blocking)
+                .with_ansi(false)
+                // .with_timer(tracing_subscriber::fmt::time::time())
+                .with_filter(
+                    filter::EnvFilter::builder()
+                        .with_env_var("RUST_LOG")
+                        .with_default_directive(filter::LevelFilter::DEBUG.into())
+                        .from_env_lossy(),
+                ),
+        )
+        .with(
+            fmt::layer()
+                .with_ansi(true)
+                .with_timer(tracing_subscriber::fmt::time::time())
+                .with_filter(filter::LevelFilter::INFO),
+        );
+
+    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
+    info!("logger started!");
+    guards
 }
-*/

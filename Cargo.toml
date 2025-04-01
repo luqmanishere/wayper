@@ -36,7 +36,10 @@ derivative = "2.2.0"
 rand = "0.9"
 notify = "8"
 notify-debouncer-mini = "0.6"
-clap = "4"
+clap = { version = "4", features = ["derive"] }
+strum = { version = "0.27", features = ["derive"] }
+serde_json = { version = "1", features = ["std"] }
+thiserror = { version = "2" }
 
 [profile.dev.package]
 # image runs too slow in debug builds. opt-level 3 helps a bit

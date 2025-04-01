@@ -1,14 +1,13 @@
 # wayper
 
-A wallpaper setter for wayland. A huge WIP.
-
-It is usable, but there may be many bugs.
+A wallpaper daemon for wayland. Huge WIP. Many, many bugs.
 
 ## Why
 
 Just a curious foray into the wayland protocol.
 
 Update 2024: I still don't understand much, especially when jumping back into this project after a year of absence.
+Update 2025: I found I broke a bunch of shit idk when, now i'm fixing all that functionality again...
 
 ## Features
 
@@ -33,8 +32,7 @@ duration = 10 # duration between rerenders, or wallpaper switching
 
 ## Caveats
 
-- Running this as a daemon is a good idea
-- So many unwraps.
+- Many unfinished features.
 
 ## Building
 
@@ -43,6 +41,7 @@ duration = 10 # duration between rerenders, or wallpaper switching
 1. Get the latest stable Rust toolchain from your package distribution or [rustup](https://rustup.rs/)
 2. Clone the repo.
 3. Run `cargo run --release` to run it, or `cargo install --path .` to install via cargo.
+4. Or you could `cargo install --git`.
 
 ### Nix Flakes
 
@@ -62,10 +61,9 @@ inputs = {
 
 - Video/GIFs/Animated wallpapers
 - Those transitions look cool af too
-- Socket for control
-- Maybe allow multiple configurations for same output with conditions
+- Socket control
+- Profiles, conditions
 - Execute command/script on wallpaper change
-
 - NixOS module
 
 ## Inspirations

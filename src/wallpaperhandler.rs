@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     io::{BufWriter, Write},
     path::PathBuf,
+    sync::{Arc, RwLock},
 };
 
 use color_eyre::Result;
@@ -54,15 +55,16 @@ pub struct Wayper {
     pub c_queue_handle: calloop::LoopHandle<'static, Self>,
     pub timer_tokens: TimerTokens,
 
-    pub outputs: Option<HashMap<String, OutputRepr>>,
+    pub outputs: Arc<RwLock<HashMap<String, OutputRepr>>>,
     pub config: WayperConfig,
+    pub socket_counter: u64,
 }
 
 // TODO: modularize with calloop?
 
 impl Wayper {
     pub fn draw(&mut self) {
-        for v in self.outputs.as_mut().expect("exists").values_mut() {
+        for v in self.outputs.write().as_mut().expect("exists").values_mut() {
             v.draw().expect("success drawing");
         }
     }
@@ -74,7 +76,7 @@ impl Wayper {
         output: client::protocol::wl_output::WlOutput,
     ) {
         let output_info = self.output_state.info(&output).expect("get info");
-        let mut outputs_hashmap = self.outputs.take().unwrap_or_default();
+        let mut outputs_hashmap = self.outputs.write().unwrap();
 
         let name = output_info.name.clone().expect("output must have name");
         tracing::Span::current().record("name", &name);
@@ -160,13 +162,13 @@ impl Wayper {
         }
 
         // reassign the hashmap we take (took)
-        self.outputs = Some(outputs_hashmap);
+        // self.outputs = Some(outputs_hashmap);
     }
 }
 
 #[derive(Debug)]
 pub struct OutputRepr {
-    output_name: String,
+    pub output_name: String,
     #[allow(dead_code)]
     wl_repr: WlOutput,
     output_info: OutputInfo,
@@ -291,6 +293,11 @@ impl OutputRepr {
         debug!("new index is {}", self.index);
         img_list[self.index].clone()
     }
+
+    /// Gives the current image, if any
+    pub fn current_img(&self) -> Option<PathBuf> {
+        self.img_list.get(self.index).cloned()
+    }
 }
 
 impl CompositorHandler for Wayper {
@@ -384,7 +391,7 @@ impl OutputHandler for Wayper {
         output.release();
         let name = info.name.expect("output has name");
 
-        let outputs = self.outputs.as_mut().unwrap();
+        let mut outputs = self.outputs.write().unwrap();
         match outputs.remove(&name) {
             Some(_) => {
                 info!("output {name} was removed");
@@ -424,7 +431,12 @@ impl LayerShellHandler for Wayper {
         _serial: u32,
     ) {
         let _id = layer.wl_surface().id().protocol_id();
-        for v in self.outputs.as_mut().expect("has").values_mut() {
+        for v in self
+            .outputs
+            .write()
+            .expect("output repr exists")
+            .values_mut()
+        {
             let surface_prot_id = v
                 .surface
                 .as_ref()
@@ -449,7 +461,12 @@ impl LayerShellHandler for Wayper {
                             .c_queue_handle
                             .insert_source(timer, move |deadline, _, data| {
                                 trace!("timer reached deadline: {}", deadline.elapsed().as_secs());
-                                for v in data.outputs.as_mut().expect("has").values_mut() {
+                                for v in data
+                                    .outputs
+                                    .write()
+                                    .expect("output repr exists")
+                                    .values_mut()
+                                {
                                     let surface_prot_id = v
                                         .surface
                                         .as_ref()
