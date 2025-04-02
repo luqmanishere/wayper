@@ -1,11 +1,8 @@
 use std::{
-    collections::HashMap,
-    os::unix::net::UnixStream,
-    path::Path,
-    sync::{Arc, RwLock},
-    time::Duration,
+    collections::HashMap, ops::Deref, os::unix::net::UnixStream, path::Path, time::Duration,
 };
 
+use clap::Parser;
 use color_eyre::Result;
 use smithay_client_toolkit::{
     compositor::CompositorState,
@@ -24,26 +21,37 @@ use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{
     filter, fmt, prelude::__tracing_subscriber_SubscriberExt, Layer as TLayer,
 };
-use wallpaperhandler::{OutputRepr, Wayper};
-use wayper::socket::{OutputWallpaper, SocketCommands, SocketError, SocketOutput, WayperSocket};
+use wallpaperhandler::Wayper;
+use wayper::{
+    socket::{OutputWallpaper, SocketCommands, SocketError, SocketOutput, WayperSocket},
+    utils::{
+        map::{OutputKey, OutputMap},
+        output::OutputRepr,
+    },
+};
 
-mod config;
-// mod surface;
 mod wallpaperhandler;
 
 fn main() -> Result<()> {
     color_eyre::install()?;
+    let cli = WayperCli::parse();
 
     // logging setup
     let _guards = start_logging();
 
     // config setup
-    #[cfg(not(debug_assertions))]
-    let config_path = Path::new("/home/luqman/.config/wayper/config.toml");
+    let config_path = if let Some(config_path) = cli.config {
+        config_path
+    } else {
+        #[cfg(not(debug_assertions))]
+        let config_path = Path::new("/home/luqman/.config/wayper/config.toml").into();
 
-    #[cfg(debug_assertions)]
-    let config_path = Path::new("./samples/test_config.toml");
-    let config = crate::config::WayperConfig::load(config_path)?;
+        #[cfg(debug_assertions)]
+        let config_path = Path::new("./samples/test_config.toml").into();
+        config_path
+    };
+
+    let config = wayper::config::WayperConfig::load(&config_path)?;
 
     // Get the wayland details from the env, initiate the wayland event source
     let conn = Connection::connect_to_env().expect("in a wayland session");
@@ -61,13 +69,14 @@ fn main() -> Result<()> {
     let layer_shell = LayerShell::bind(&globals, &qh).expect("layer shell is not available");
     let shm = Shm::bind(&globals, &qh).expect("wl_shm is not available");
     let output_state = OutputState::new(&globals, &qh);
-    let outputs_hashmap_arc: Arc<RwLock<HashMap<String, OutputRepr>>> = Default::default();
+    // let outputs_hashmap_arc: Arc<RwLock<HashMap<String, OutputRepr>>> = Default::default();
+    let output_map: OutputMap = Default::default();
 
     // channel based event source for our socket
     let (socket_tx, socket_channel) = calloop::channel::channel::<UnixStream>();
     let mut socket = WayperSocket::new("/tmp/wayper/.socket.sock".into(), socket_tx);
 
-    let outputs_hashmap_handle = outputs_hashmap_arc.clone();
+    let outputs_map_handle = output_map.clone();
     // insert the channel receiver as a source in calloop
     event_loop
         .handle()
@@ -79,7 +88,7 @@ fn main() -> Result<()> {
                     match handle_stream(
                         shared_data.socket_counter,
                         stream,
-                        outputs_hashmap_handle.clone(),
+                        outputs_map_handle.clone(),
                     ) {
                         Ok(_) => {
                             tracing::debug!("stream is handled");
@@ -96,6 +105,7 @@ fn main() -> Result<()> {
         })
         .unwrap();
 
+    // TODO: remove this
     // keep this alive until the end of the program
     let _socket_listener = socket.socket_sender_thread();
 
@@ -105,7 +115,7 @@ fn main() -> Result<()> {
         output_state,
         layer_shell,
         shm,
-        outputs: outputs_hashmap_arc,
+        outputs: output_map,
         config,
         c_queue_handle: event_loop.handle(),
         timer_tokens: HashMap::new(),
@@ -174,11 +184,7 @@ fn main() -> Result<()> {
 }
 
 #[tracing::instrument(skip_all, fields(counter = _counter))]
-fn handle_stream(
-    _counter: u64,
-    mut stream: UnixStream,
-    outputs: Arc<RwLock<HashMap<String, OutputRepr>>>,
-) -> Result<()> {
+fn handle_stream(_counter: u64, mut stream: UnixStream, outputs: OutputMap) -> Result<()> {
     tracing::debug!("Socket call counter: {_counter}");
     let command = SocketCommands::from_socket(&mut stream)?;
 
@@ -205,13 +211,14 @@ fn handle_stream(
 
             // if output name specified
             if let Some(output_name) = output_name {
-                match outputs.read().unwrap().get(&output_name) {
-                    Some(output) => match get_output_current_image(output) {
-                        Ok(outwp) => {
-                            SocketOutput::CurrentWallpaper(outwp).write_to_socket(&mut stream)?
+                match outputs.get(OutputKey::OutputName(output_name.clone())) {
+                    Some(output) => {
+                        match get_output_current_image(output.lock().unwrap().deref()) {
+                            Ok(outwp) => SocketOutput::CurrentWallpaper(outwp)
+                                .write_to_socket(&mut stream)?,
+                            Err(error) => error.write_to_socket(&mut stream)?,
                         }
-                        Err(error) => error.write_to_socket(&mut stream)?,
-                    },
+                    }
                     None => SocketError::UnindentifiedOutput { output_name }
                         .write_to_socket(&mut stream)?,
                 }
@@ -219,8 +226,9 @@ fn handle_stream(
                 // i would use iterators here if i could, but i cant figure this out
                 let mut output_wallpapers = vec![];
                 let mut errors = vec![];
-                for output in outputs.read().unwrap().values() {
-                    match get_output_current_image(output) {
+                for value in outputs.iter() {
+                    let output = value.lock().unwrap();
+                    match get_output_current_image(output.deref()) {
                         Ok(outwp) => output_wallpapers.push(outwp),
                         Err(error) => errors.push(error),
                     }
@@ -228,6 +236,35 @@ fn handle_stream(
                 SocketOutput::Wallpapers(output_wallpapers).write_to_socket(&mut stream)?;
                 // TODO: figure out how to send multi frame responses
                 // SocketOutput::MultipleErrors(errors).write_to_socket(&mut stream)?;
+            }
+        }
+        SocketCommands::Toggle { output_name } => {
+            if let Some(output_name) = output_name {
+                match outputs.get(OutputKey::OutputName(output_name.clone())) {
+                    Some(output) => {
+                        let mut output = output.lock().unwrap();
+                        output.toggle_visible();
+                        SocketOutput::Message(format!(
+                            "Toggled visibility for output {}",
+                            output.output_name
+                        ))
+                        .write_to_socket(&mut stream)?;
+                    }
+                    None => SocketError::UnindentifiedOutput { output_name }
+                        .write_to_socket(&mut stream)?,
+                }
+            } else {
+                let mut toggled = vec![];
+                for value in outputs.iter() {
+                    let mut output = value.lock().unwrap();
+                    output.toggle_visible();
+                    toggled.push(output.output_name.clone());
+                }
+                SocketOutput::Message(format!(
+                    "Toggled visibility for outputs {}",
+                    toggled.join(", ")
+                ))
+                .write_to_socket(&mut stream)?;
             }
         }
         // TODO: toggle
@@ -286,4 +323,11 @@ fn start_logging() -> Vec<WorkerGuard> {
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
     info!("logger started!");
     guards
+}
+
+#[derive(Parser)]
+struct WayperCli {
+    /// Path to the config to use
+    #[arg(short, long)]
+    config: Option<std::path::PathBuf>,
 }

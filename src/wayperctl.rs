@@ -69,6 +69,12 @@ fn main() -> Result<()> {
             handle_error_from_daemon(&output)?;
 
             // TODO: output
+            if let SocketOutput::Message(msg) = output {
+                println!("{msg}");
+                tracing::info!("{msg}");
+            } else {
+                failed_to_get_response()?;
+            }
         }
         // this is also a template for handling commands
         command => {

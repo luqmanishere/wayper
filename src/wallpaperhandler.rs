@@ -1,46 +1,37 @@
-use std::{
-    collections::HashMap,
-    io::{BufWriter, Write},
-    path::PathBuf,
-    sync::{Arc, RwLock},
-};
+use std::collections::HashMap;
 
-use color_eyre::Result;
-use image::imageops::FilterType;
 use rand::seq::SliceRandom;
+use smithay_client_toolkit::reexports::client;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_compositor, delegate_layer, delegate_output, delegate_registry, delegate_shm,
-    output::{OutputHandler, OutputInfo, OutputState},
+    output::{OutputHandler, OutputState},
     reexports::{
         calloop::{
             self,
             timer::{TimeoutAction, Timer},
             RegistrationToken,
         },
-        client::{
-            self,
-            protocol::{wl_output::WlOutput, wl_shm, wl_surface::WlSurface},
-            Proxy, QueueHandle,
-        },
+        client::{Proxy, QueueHandle},
     },
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
     shell::{
-        wlr_layer::{
-            Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
-        },
+        wlr_layer::{Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler},
         WaylandSurface,
     },
-    shm::{
-        slot::{Buffer, SlotPool},
-        Shm, ShmHandler,
-    },
+    shm::{slot::SlotPool, Shm, ShmHandler},
 };
 use tracing::{debug, error, info, instrument, trace, warn};
 use walkdir::WalkDir;
 
-use crate::config::{OutputConfig, WayperConfig};
+use wayper::{
+    config::WayperConfig,
+    utils::{
+        map::{OutputKey, OutputMap},
+        output::OutputRepr,
+    },
+};
 
 pub type OutputId = u32;
 /// The key should be the output id from WlOutput
@@ -55,7 +46,7 @@ pub struct Wayper {
     pub c_queue_handle: calloop::LoopHandle<'static, Self>,
     pub timer_tokens: TimerTokens,
 
-    pub outputs: Arc<RwLock<HashMap<String, OutputRepr>>>,
+    pub outputs: OutputMap,
     pub config: WayperConfig,
     pub socket_counter: u64,
 }
@@ -64,7 +55,9 @@ pub struct Wayper {
 
 impl Wayper {
     pub fn draw(&mut self) {
-        for v in self.outputs.write().as_mut().expect("exists").values_mut() {
+        for rm in self.outputs.iter() {
+            let mut v = rm.lock().unwrap();
+
             v.draw().expect("success drawing");
         }
     }
@@ -76,13 +69,13 @@ impl Wayper {
         output: client::protocol::wl_output::WlOutput,
     ) {
         let output_info = self.output_state.info(&output).expect("get info");
-        let mut outputs_hashmap = self.outputs.write().unwrap();
+        let outputs_map = &mut self.outputs;
 
         let name = output_info.name.clone().expect("output must have name");
         tracing::Span::current().record("name", &name);
 
         // if output does not exist we add it
-        if !outputs_hashmap.contains_key(&name) {
+        if !outputs_map.contains_key(OutputKey::OutputName(name.clone())) {
             info!("got new_output {}", name);
 
             let surface = self.compositor_state.create_surface(qh);
@@ -138,12 +131,13 @@ impl Wayper {
                 vec![]
             };
 
-            outputs_hashmap.insert(
+            outputs_map.insert(
                 name.clone(),
+                surface.id(),
+                output.id(),
                 OutputRepr {
                     output_name: name.clone(),
                     wl_repr: output,
-                    qh: qh.clone(),
                     output_info,
                     output_config,
                     dimensions: None,
@@ -155,6 +149,7 @@ impl Wayper {
                     first_configure: true,
                     img_list,
                     index: 0,
+                    visible: true,
                 },
             );
         } else {
@@ -163,140 +158,6 @@ impl Wayper {
 
         // reassign the hashmap we take (took)
         // self.outputs = Some(outputs_hashmap);
-    }
-}
-
-#[derive(Debug)]
-pub struct OutputRepr {
-    pub output_name: String,
-    #[allow(dead_code)]
-    wl_repr: WlOutput,
-    output_info: OutputInfo,
-    output_config: Option<OutputConfig>,
-    dimensions: Option<(u32, u32)>,
-    #[allow(dead_code)]
-    scale_factor: i64,
-    #[allow(dead_code)]
-    qh: QueueHandle<Wayper>,
-    first_configure: bool,
-
-    pool: SlotPool,
-    buffer: Option<Buffer>,
-    surface: Option<WlSurface>,
-    layer: LayerSurface,
-
-    index: usize,
-    img_list: Vec<PathBuf>,
-}
-
-impl OutputRepr {
-    #[instrument(skip_all, fields(name=self.output_name))]
-    pub fn update_config(&mut self, new_config: OutputConfig) {
-        trace!("new config: {new_config:?}");
-        if new_config
-            .name
-            .as_ref()
-            .expect("config must have output name")
-            == &self.output_name
-        {
-            self.output_config = Some(new_config);
-            self.buffer = None;
-
-            info!("received updated config");
-        }
-    }
-
-    #[instrument(skip_all, fields(name=self.output_name))]
-    pub fn draw(&mut self) -> Result<()> {
-        trace!("begin drawing");
-        let (width, height) = self.dimensions.expect("exists");
-        let stride = width as i32 * 4;
-
-        let path = self.next();
-        info!("drawing: {}", path.display());
-
-        let image = image::open(&path)?
-            .resize_to_fill(width, height, FilterType::Lanczos3)
-            .into_rgba8();
-
-        // check if buffer exists
-        let (buffer, canvas) = if let Some(buffer) = self.buffer.take() {
-            match self.pool.canvas(&buffer) {
-                Some(canvas) => (buffer, canvas),
-                None => {
-                    warn!("Missing canvas when buffer exists!");
-                    let (buffer, canvas) = self
-                        .pool
-                        .create_buffer(
-                            width as i32,
-                            height as i32,
-                            stride,
-                            wl_shm::Format::Abgr8888,
-                        )
-                        .expect("create buffer");
-                    (buffer, canvas)
-                }
-            }
-        } else {
-            let (buffer, canvas) = self
-                .pool
-                .create_buffer(
-                    width as i32,
-                    height as i32,
-                    stride,
-                    wl_shm::Format::Abgr8888,
-                )
-                .expect("create buffer");
-            (buffer, canvas)
-        };
-
-        // Draw to the window:
-        {
-            let mut writer = BufWriter::new(canvas);
-            writer.write_all(image.as_raw()).unwrap();
-            writer.flush().unwrap();
-        }
-
-        // Damage the entire window
-        self.layer
-            .wl_surface()
-            .damage_buffer(0, 0, width as i32, height as i32);
-
-        // Attach and commit to present.
-        buffer
-            .attach_to(self.layer.wl_surface())
-            .expect("buffer attach");
-        self.layer.commit();
-
-        // reuse the buffer created, since
-        self.buffer = Some(buffer);
-
-        if self.first_configure {
-            self.first_configure = false;
-        }
-        trace!("finish drawing");
-        Ok(())
-    }
-
-    /// if there is an image on current_img, give the image and increase index
-    fn next(&mut self) -> PathBuf {
-        let img_list = &self.img_list;
-        let index = self.index;
-        debug!("Current index is {}", index);
-        if index < img_list.len() - 1 {
-            self.index = index + 1;
-        }
-        if index == img_list.len() - 1 {
-            self.index = 0;
-        }
-
-        debug!("new index is {}", self.index);
-        img_list[self.index].clone()
-    }
-
-    /// Gives the current image, if any
-    pub fn current_img(&self) -> Option<PathBuf> {
-        self.img_list.get(self.index).cloned()
     }
 }
 
@@ -318,7 +179,7 @@ impl CompositorHandler for Wayper {
         surface: &client::protocol::wl_surface::WlSurface,
         time: u32,
     ) {
-        debug!("{:?} - {}", surface, time);
+        debug!("framed called {:?} - {}", surface, time);
         self.draw();
     }
 
@@ -391,22 +252,15 @@ impl OutputHandler for Wayper {
         output.release();
         let name = info.name.expect("output has name");
 
-        let mut outputs = self.outputs.write().unwrap();
-        match outputs.remove(&name) {
-            Some(_) => {
-                info!("output {name} was removed");
-                match self.timer_tokens.remove_entry(&info.id) {
-                    Some((_id, token)) => {
-                        self.c_queue_handle.remove(token);
-                        trace!("removed timer for {name}");
-                    }
-                    None => {
-                        error!("failed to remove timer_token entry");
-                    }
-                };
+        let _removed = self.outputs.remove(OutputKey::OutputName(name.clone()));
+        info!("output {name} was removed");
+        match self.timer_tokens.remove_entry(&info.id) {
+            Some((_, token)) => {
+                self.c_queue_handle.remove(token);
+                trace!("removed timer for {name}");
             }
             None => {
-                error!("failed to remove output {name}");
+                error!("failed to remove timer_token entry");
             }
         }
     }
@@ -419,6 +273,7 @@ impl LayerShellHandler for Wayper {
         _qh: &client::QueueHandle<Self>,
         _layer: &smithay_client_toolkit::shell::wlr_layer::LayerSurface,
     ) {
+        tracing::debug!("layer shell handler closed called for layer for surface {}", _layer.wl_surface().id());
     }
 
     #[instrument(skip_all, fields(layer_id=layer.wl_surface().id().protocol_id()))]
@@ -430,71 +285,60 @@ impl LayerShellHandler for Wayper {
         configure: smithay_client_toolkit::shell::wlr_layer::LayerSurfaceConfigure,
         _serial: u32,
     ) {
-        let _id = layer.wl_surface().id().protocol_id();
-        for v in self
+        // this function is called on instantiate and when there are dimension changes
+        tracing::info!("received configure for {}", layer.wl_surface().id());
+        let surface_id = layer.wl_surface().id();
+        let output = self
             .outputs
-            .write()
-            .expect("output repr exists")
-            .values_mut()
+            .get(OutputKey::SurfaceId(layer.wl_surface().id()))
+            .expect("entry initialized");
         {
-            let surface_prot_id = v
-                .surface
-                .as_ref()
-                .expect("surface exists")
-                .id()
-                .protocol_id();
-            if surface_prot_id == layer.wl_surface().id().protocol_id() {
-                // only if there is an output config do we render
-                if let Some(output_config) = v.output_config.clone() {
-                    if v.first_configure {
-                        let output_id = v.output_info.id;
-                        info!("first configure for surface {surface_prot_id}");
-                        v.dimensions = Some(configure.new_size);
+            let mut output = output.lock().unwrap();
+            if let Some(output_config) = output.output_config.clone() {
+                if output.first_configure {
+                    let output_id = output.output_info.id;
+                    info!("first configure for surface {surface_id}");
+                    output.dimensions = Some(configure.new_size);
 
-                        // first draw
-                        v.draw().expect("success draw");
-                        let timer = Timer::from_duration(std::time::Duration::from_secs(
-                            output_config.duration.unwrap_or(60),
-                        ));
-                        let id = surface_prot_id;
-                        let timer_token = self
-                            .c_queue_handle
-                            .insert_source(timer, move |deadline, _, data| {
-                                trace!("timer reached deadline: {}", deadline.elapsed().as_secs());
-                                for v in data
-                                    .outputs
-                                    .write()
-                                    .expect("output repr exists")
-                                    .values_mut()
-                                {
-                                    let surface_prot_id = v
-                                        .surface
-                                        .as_ref()
-                                        .expect("surface exists")
-                                        .id()
-                                        .protocol_id();
-                                    if surface_prot_id == id {
-                                        //TODO: log failure
-                                        v.draw().expect("draw success");
-                                        return TimeoutAction::ToDuration(
-                                            std::time::Duration::from_secs(
-                                                output_config.duration.unwrap_or(60),
-                                            ),
-                                        );
-                                    }
-                                }
-                                TimeoutAction::ToDuration(std::time::Duration::from_secs(60))
-                            })
-                            .expect("works");
-                        self.timer_tokens.insert(output_id, timer_token);
-                        // TODO: watch dir to update config
-                    } else if !v.first_configure && v.dimensions != Some(configure.new_size) {
-                        warn!("received configure event, screen size changed");
-                        v.dimensions = Some(configure.new_size);
-                        v.draw().expect("success draw");
-                    } else if !v.first_configure && v.dimensions == Some(configure.new_size) {
-                        warn!("received configure event, no size changes")
-                    }
+                    // first draw
+                    output.draw().expect("success draw");
+                    let timer = Timer::from_duration(std::time::Duration::from_secs(
+                        output_config.duration.unwrap_or(60),
+                    ));
+                    let timer_token = self
+                        .c_queue_handle
+                        .insert_source(timer, move |deadline, _, data| {
+                            let id = surface_id.clone();
+                            trace!("timer reached deadline: {}", deadline.elapsed().as_secs());
+                            let output = data
+                                .outputs
+                                .get(OutputKey::SurfaceId(id.clone()))
+                                .expect("surface initialized");
+                            let surface_prot_id = output
+                                .lock()
+                                .unwrap()
+                                .surface
+                                .as_ref()
+                                .expect("surface exists")
+                                .id();
+                            if surface_prot_id == id {
+                                //TODO: log failure
+                                output.lock().unwrap().draw().expect("draw success");
+                                return TimeoutAction::ToDuration(std::time::Duration::from_secs(
+                                    output_config.duration.unwrap_or(60),
+                                ));
+                            }
+                            TimeoutAction::ToDuration(std::time::Duration::from_secs(60))
+                        })
+                        .expect("works");
+                    self.timer_tokens.insert(output_id, timer_token);
+                    // TODO: watch dir to update config
+                } else if !output.first_configure && output.dimensions != Some(configure.new_size) {
+                    warn!("received configure event, screen size changed");
+                    output.dimensions = Some(configure.new_size);
+                    output.draw().expect("success draw");
+                } else if !output.first_configure && output.dimensions == Some(configure.new_size) {
+                    warn!("received configure event, no size changes")
                 }
             }
         }

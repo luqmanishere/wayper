@@ -98,6 +98,9 @@ pub enum SocketCommands {
         #[arg(short, long)]
         output_name: Option<String>,
     },
+    /// Toggles showing the wallpaper for outputs.
+    ///
+    /// If no output name is specified, toggles all outputs, regardless of visibility.
     Toggle {
         #[arg(short, long)]
         output_name: Option<String>,

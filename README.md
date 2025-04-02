@@ -1,5 +1,7 @@
 # wayper
 
+[![](https://tokei.rs/b1/github/luqmanishere/wayper)](https://github.com/luqmanishere/wayper)
+
 A wallpaper daemon for wayland. Huge WIP. Many, many bugs.
 
 ## Why
@@ -56,6 +58,14 @@ inputs = {
 
 2. Use the provided Home Manager module (exported under homeManagerModules) to configure it as a service.
 3. NixOS module coming soonish.
+
+## Testing
+
+### Outputs: Connection, Disconnection, etc
+Testing can be done in any Wayland environment (untested on KDE & GNOME). To test code regarding outputs,
+it can be done with `sway`'s headless outputs. You can run sway within an already running Wayland env,
+launch foot with the default keybindings, spawn outputs and run your tests there. The development
+Nix flake and `justfile` facilitates this method of testing
 
 ## What's Next?
 

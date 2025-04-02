@@ -18,10 +18,10 @@ color-eyre = "0.6"
 smithay-client-toolkit = { version = "0.19" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = [
-  "env-filter",
-  "fmt",
-  "time",
-  "local-time",
+    "env-filter",
+    "fmt",
+    "time",
+    "local-time",
 ] }
 image = "0.25"
 timer = "0.2"
@@ -40,6 +40,7 @@ clap = { version = "4", features = ["derive"] }
 strum = { version = "0.27", features = ["derive"] }
 serde_json = { version = "1", features = ["std"] }
 thiserror = { version = "2" }
+dashmap = { version = "7.0.0-rc2" }
 
 [profile.dev.package]
 # image runs too slow in debug builds. opt-level 3 helps a bit

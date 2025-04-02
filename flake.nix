@@ -52,7 +52,6 @@
           inherit system;
           overlays = [fenix.overlays.default];
           config.allowUnfree = true;
-          config.permittedInsecurePackages = ["tightvnc-1.3.10"];
         };
 
         packages.default = packages.wayper;
@@ -84,6 +83,14 @@
             pkg-config
             ripgrep
             stdenv.cc
+            # testing apparatus
+            sway
+            foot
+            nixd
+            python3
+            python3Packages.matplotlib
+            python3Packages.tkinter
+            psrecord
           ];
 
           packagesFrom = [packages.default];
