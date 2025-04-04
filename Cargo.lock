@@ -2195,6 +2195,7 @@ dependencies = [
  "dashmap",
  "derivative",
  "image",
+ "indexmap",
  "mime",
  "mime_guess",
  "notify",

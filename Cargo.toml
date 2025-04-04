@@ -41,6 +41,7 @@ strum = { version = "0.27", features = ["derive"] }
 serde_json = { version = "1", features = ["std"] }
 thiserror = { version = "2" }
 dashmap = { version = "7.0.0-rc2" }
+indexmap = {version = "2"}
 
 [profile.dev.package]
 # image runs too slow in debug builds. opt-level 3 helps a bit

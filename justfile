@@ -9,9 +9,17 @@ run:
 build-nix:
     nix build
 
-# run the wayper daemon buildt with nix
+# run the wayper daemon built with nix
 run-nix: build-nix
     ./result/bin/wayper -c samples/test_config.toml
+
+# run the wayper daemon built with nix, loglevel=debug
+run-nix-ldebug: build-nix
+    ./result/bin/wayper -l debug -c samples/test_config.toml
+
+# run the wayper daemon built with nix, loglevel=trace
+run-nix-ltrace: build-nix
+    ./result/bin/wayper -l trace -c samples/test_config.toml
 
 # clean build artifacts
 clean:
@@ -41,3 +49,6 @@ sway-list-outputs:
 # record memory and cpu usage - 1 min
 psrecord-wayper-60:
     direnv exec . psrecord $(pgrep wayper) --duration 60 --interval 1 --plot plot1.png
+
+htop:
+    htop -p $(pgrep wayper)

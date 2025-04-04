@@ -1,8 +1,6 @@
-use std::{
-    collections::HashMap, ops::Deref, os::unix::net::UnixStream, path::Path, time::Duration,
-};
+use std::{collections::HashMap, ops::Deref, os::unix::net::UnixStream, path::Path};
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use color_eyre::Result;
 use smithay_client_toolkit::{
     compositor::CompositorState,
@@ -16,17 +14,16 @@ use smithay_client_toolkit::{
     shell::wlr_layer::LayerShell,
     shm::Shm,
 };
-use tracing::info;
+use tracing::{info, level_filters::LevelFilter};
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{
-    filter, fmt, prelude::__tracing_subscriber_SubscriberExt, Layer as TLayer,
-};
+use tracing_subscriber::{fmt, prelude::__tracing_subscriber_SubscriberExt, Layer as TLayer};
 use wallpaperhandler::Wayper;
 use wayper::{
     socket::{OutputWallpaper, SocketCommands, SocketError, SocketOutput, WayperSocket},
     utils::{
         map::{OutputKey, OutputMap},
         output::OutputRepr,
+        render_server::RenderServer,
     },
 };
 
@@ -37,7 +34,7 @@ fn main() -> Result<()> {
     let cli = WayperCli::parse();
 
     // logging setup
-    let _guards = start_logging();
+    let _guards = start_logging(cli.log_level);
 
     // config setup
     let config_path = if let Some(config_path) = cli.config {
@@ -120,11 +117,12 @@ fn main() -> Result<()> {
         c_queue_handle: event_loop.handle(),
         timer_tokens: HashMap::new(),
         socket_counter: 0,
+        render_server: std::sync::Arc::new(RenderServer::new()),
     };
 
     loop {
         event_loop
-            .dispatch(Duration::from_secs(30), &mut data)
+            .dispatch(None, &mut data)
             .expect("event loop doesn't panic");
     }
     /*
@@ -293,7 +291,7 @@ fn handle_stream(_counter: u64, mut stream: UnixStream, outputs: OutputMap) -> R
     Ok(())
 }
 
-fn start_logging() -> Vec<WorkerGuard> {
+fn start_logging(file_log_level: LogLevel) -> Vec<WorkerGuard> {
     let mut guards = Vec::new();
     let file_appender = tracing_appender::rolling::never("/tmp/wayper", "wayper-log");
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
@@ -306,18 +304,13 @@ fn start_logging() -> Vec<WorkerGuard> {
                 .with_writer(non_blocking)
                 .with_ansi(false)
                 // .with_timer(tracing_subscriber::fmt::time::time())
-                .with_filter(
-                    filter::EnvFilter::builder()
-                        .with_env_var("RUST_LOG")
-                        .with_default_directive(filter::LevelFilter::DEBUG.into())
-                        .from_env_lossy(),
-                ),
+                .with_filter(file_log_level.as_loglevel()),
         )
         .with(
             fmt::layer()
                 .with_ansi(true)
                 .with_timer(tracing_subscriber::fmt::time::time())
-                .with_filter(filter::LevelFilter::INFO),
+                .with_filter(file_log_level.as_loglevel()),
         );
 
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
@@ -330,4 +323,29 @@ struct WayperCli {
     /// Path to the config to use
     #[arg(short, long)]
     config: Option<std::path::PathBuf>,
+
+    /// Log level for file.
+    #[arg(short, long, value_enum, default_value_t = LogLevel::Info)]
+    log_level: LogLevel,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Default)]
+enum LogLevel {
+    Error,
+    Warn,
+    #[default]
+    Info,
+    Debug,
+    Trace,
+}
+impl LogLevel {
+    pub fn as_loglevel(&self) -> tracing_subscriber::filter::LevelFilter {
+        match self {
+            LogLevel::Error => LevelFilter::ERROR,
+            LogLevel::Warn => LevelFilter::WARN,
+            LogLevel::Info => LevelFilter::INFO,
+            LogLevel::Debug => LevelFilter::DEBUG,
+            LogLevel::Trace => LevelFilter::TRACE,
+        }
+    }
 }

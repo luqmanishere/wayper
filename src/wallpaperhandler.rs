@@ -30,6 +30,7 @@ use wayper::{
     utils::{
         map::{OutputKey, OutputMap},
         output::OutputRepr,
+        render_server::RenderServer,
     },
 };
 
@@ -49,6 +50,7 @@ pub struct Wayper {
     pub outputs: OutputMap,
     pub config: WayperConfig,
     pub socket_counter: u64,
+    pub render_server: std::sync::Arc<RenderServer>,
 }
 
 // TODO: modularize with calloop?
@@ -150,6 +152,7 @@ impl Wayper {
                     img_list,
                     index: 0,
                     visible: true,
+                    render_server: std::sync::Arc::clone(&self.render_server),
                 },
             );
         } else {
@@ -169,7 +172,11 @@ impl CompositorHandler for Wayper {
         surface: &client::protocol::wl_surface::WlSurface,
         new_factor: i32,
     ) {
-        debug!("{:?} - {}", surface, new_factor);
+        debug!(
+            "scale factor changed for surface {:?} - {}",
+            surface.id(),
+            new_factor
+        );
     }
 
     fn frame(
@@ -273,7 +280,10 @@ impl LayerShellHandler for Wayper {
         _qh: &client::QueueHandle<Self>,
         _layer: &smithay_client_toolkit::shell::wlr_layer::LayerSurface,
     ) {
-        tracing::debug!("layer shell handler closed called for layer for surface {}", _layer.wl_surface().id());
+        tracing::debug!(
+            "layer shell handler closed called for layer for surface {}",
+            _layer.wl_surface().id()
+        );
     }
 
     #[instrument(skip_all, fields(layer_id=layer.wl_surface().id().protocol_id()))]
@@ -292,52 +302,62 @@ impl LayerShellHandler for Wayper {
             .outputs
             .get(OutputKey::SurfaceId(layer.wl_surface().id()))
             .expect("entry initialized");
+        let output_handle = output.clone();
         {
-            let mut output = output.lock().unwrap();
-            if let Some(output_config) = output.output_config.clone() {
-                if output.first_configure {
-                    let output_id = output.output_info.id;
+            let mut output_guard = output.lock().unwrap();
+            if let Some(output_config) = output_guard.output_config.clone() {
+                if output_guard.first_configure {
+                    let output_id = output_guard.output_info.id;
                     info!("first configure for surface {surface_id}");
-                    output.dimensions = Some(configure.new_size);
+                    output_guard.dimensions = Some(configure.new_size);
 
                     // first draw
-                    output.draw().expect("success draw");
+                    output_guard.draw().expect("success draw");
+
+                    // copy the output to another thread, then send messages through channels
                     let timer = Timer::from_duration(std::time::Duration::from_secs(
                         output_config.duration.unwrap_or(60),
                     ));
+
                     let timer_token = self
                         .c_queue_handle
-                        .insert_source(timer, move |deadline, _, data| {
-                            let id = surface_id.clone();
-                            trace!("timer reached deadline: {}", deadline.elapsed().as_secs());
-                            let output = data
-                                .outputs
-                                .get(OutputKey::SurfaceId(id.clone()))
-                                .expect("surface initialized");
-                            let surface_prot_id = output
-                                .lock()
-                                .unwrap()
-                                .surface
-                                .as_ref()
-                                .expect("surface exists")
-                                .id();
-                            if surface_prot_id == id {
-                                //TODO: log failure
-                                output.lock().unwrap().draw().expect("draw success");
-                                return TimeoutAction::ToDuration(std::time::Duration::from_secs(
+                        .insert_source(timer, move |previous_deadline, _, _data| {
+                            // regardless of rendering time, the next deadline will be exactly
+                            // n seconds later
+                            let new_instant = previous_deadline
+                                + std::time::Duration::from_secs(
                                     output_config.duration.unwrap_or(60),
-                                ));
+                                );
+                            trace!(
+                                "timer reached deadline: {:?} | new instant: {:?}",
+                                previous_deadline,
+                                new_instant
+                            );
+
+                            match output_handle.lock().unwrap().draw() {
+                                Ok(_) => {
+                                    tracing::info!("draw success");
+                                }
+                                Err(e) => {
+                                    tracing::error!("draw failed with error: {e}");
+                                }
                             }
-                            TimeoutAction::ToDuration(std::time::Duration::from_secs(60))
+
+                            TimeoutAction::ToInstant(new_instant)
                         })
                         .expect("works");
                     self.timer_tokens.insert(output_id, timer_token);
+                    tracing::info!("done with configure");
                     // TODO: watch dir to update config
-                } else if !output.first_configure && output.dimensions != Some(configure.new_size) {
+                } else if !output_guard.first_configure
+                    && output_guard.dimensions != Some(configure.new_size)
+                {
                     warn!("received configure event, screen size changed");
-                    output.dimensions = Some(configure.new_size);
-                    output.draw().expect("success draw");
-                } else if !output.first_configure && output.dimensions == Some(configure.new_size) {
+                    output_guard.dimensions = Some(configure.new_size);
+                    output_guard.draw().expect("success draw");
+                } else if !output_guard.first_configure
+                    && output_guard.dimensions == Some(configure.new_size)
+                {
                     warn!("received configure event, no size changes")
                 }
             }

@@ -3,8 +3,10 @@
 use std::{
     io::{BufWriter, Write},
     path::PathBuf,
+    sync::Arc,
 };
 
+use color_eyre::eyre::Context;
 use smithay_client_toolkit::{
     output::OutputInfo,
     reexports::client::protocol::{wl_output::WlOutput, wl_shm, wl_surface::WlSurface},
@@ -12,7 +14,10 @@ use smithay_client_toolkit::{
     shm::slot::{Buffer, SlotPool},
 };
 
-use crate::config::OutputConfig;
+use crate::{
+    config::OutputConfig,
+    utils::render_server::{RenderJobRequest, RenderServer},
+};
 
 // TODO: maybe all pub is not a good idea
 
@@ -36,6 +41,7 @@ pub struct OutputRepr {
     pub index: usize,
     pub img_list: Vec<PathBuf>,
     pub visible: bool,
+    pub render_server: Arc<RenderServer>,
 }
 
 impl OutputRepr {
@@ -57,6 +63,7 @@ impl OutputRepr {
 
     #[tracing::instrument(skip_all, fields(name=self.output_name))]
     pub fn draw(&mut self) -> color_eyre::Result<()> {
+        let instant = std::time::Instant::now();
         if !self.visible {
             tracing::debug!("Not visible, not drawing");
             return Ok(());
@@ -69,9 +76,14 @@ impl OutputRepr {
         let path = self.next();
         tracing::info!("drawing: {}", path.display());
 
-        let image = image::open(&path)?
-            .resize_to_fill(width, height, image::imageops::FilterType::Lanczos3)
-            .into_rgba8();
+        let request = RenderJobRequest::Image {
+            width,
+            height,
+            image: path.clone(),
+        };
+
+        // only the first render will be synchronous with the request. subsequent renders are queued
+        let image = self.render_server.get_job(request);
 
         // check if buffer exists
         let (buffer, canvas) = if let Some(buffer) = self.buffer.take() {
@@ -120,7 +132,7 @@ impl OutputRepr {
         buffer
             .attach_to(self.layer.wl_surface())
             .expect("buffer attach");
-        self.layer.commit();
+        self.layer.wl_surface().commit();
 
         // reuse the buffer created, since
         self.buffer = Some(buffer);
@@ -129,23 +141,54 @@ impl OutputRepr {
             self.first_configure = false;
         }
         tracing::trace!("finish drawing");
+
+        self.render_server
+            .submit_job(RenderJobRequest::Image {
+                width,
+                height,
+                image: self.peek_next_img(),
+            })
+            .wrap_err("Error sending job to render server")?;
+
+        tracing::info!("draw elapsed time: {}ms", instant.elapsed().as_millis());
         Ok(())
     }
 
-    /// if there is an image on current_img, give the image and increase index
+    /// Increment the index and give the image. If its the first configure, it uses
+    /// an index of 0
     fn next(&mut self) -> PathBuf {
         let img_list = &self.img_list;
-        let index = self.index;
-        tracing::debug!("Current index is {}", index);
-        if index < img_list.len() - 1 {
-            self.index = index + 1;
-        }
-        if index == img_list.len() - 1 {
-            self.index = 0;
-        }
+        tracing::debug!("Current index is {}", self.index);
+        self.index = self.get_next_index();
 
         tracing::debug!("new index is {}", self.index);
         img_list[self.index].clone()
+    }
+
+    /// get the next image, without incrementing the index
+    fn peek_next_img(&self) -> PathBuf {
+        self.img_list[self.get_next_index()].clone()
+    }
+
+    /// Get the next index, but does not modify the original index. Accounts
+    /// for the length of the image vec
+    fn get_next_index(&self) -> usize {
+        let mut index = self.index;
+
+        // the first render should use the first entry
+        if self.first_configure {
+            return 0;
+        }
+
+        // compute the next index
+        match index.cmp(&(self.img_list.len() - 1)) {
+            std::cmp::Ordering::Less => index += 1,
+            std::cmp::Ordering::Equal => index = 0,
+            std::cmp::Ordering::Greater => {
+                panic!("index cannot be greated than the reference buffer")
+            }
+        }
+        index
     }
 
     /// Gives the current image, if any

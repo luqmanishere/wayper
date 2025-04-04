@@ -29,18 +29,15 @@ impl OutputMap {
     /// Get vector index from key by map lookup
     fn get_idx(&self, key: OutputKey) -> Option<usize> {
         match key {
-            OutputKey::OutputName(output_name) => self
-                .output_name_map
-                .get(&output_name)
-                .map(|e| e.value().clone()),
-            OutputKey::SurfaceId(surface_id) => self
-                .surface_id_map
-                .get(&surface_id)
-                .map(|e| e.value().clone()),
-            OutputKey::OutputId(output_id) => self
-                .output_id_map
-                .get(&output_id)
-                .map(|e| e.value().clone()),
+            OutputKey::OutputName(output_name) => {
+                self.output_name_map.get(&output_name).map(|e| *e.value())
+            }
+            OutputKey::SurfaceId(surface_id) => {
+                self.surface_id_map.get(&surface_id).map(|e| *e.value())
+            }
+            OutputKey::OutputId(output_id) => {
+                self.output_id_map.get(&output_id).map(|e| *e.value())
+            }
         }
     }
 
@@ -107,7 +104,7 @@ pub struct OutputMapIter<'a> {
     index: usize,
 }
 
-impl<'a> Iterator for OutputMapIter<'a> {
+impl Iterator for OutputMapIter<'_> {
     type Item = Arc<Mutex<OutputRepr>>;
 
     fn next(&mut self) -> Option<Self::Item> {
