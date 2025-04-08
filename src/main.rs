@@ -118,6 +118,7 @@ fn main() -> Result<()> {
         timer_tokens: HashMap::new(),
         socket_counter: 0,
         render_server: std::sync::Arc::new(RenderServer::new()),
+        last_time:0
     };
 
     loop {

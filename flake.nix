@@ -43,8 +43,8 @@
         wayper = {release ? true}:
           naersk'.buildPackage {
             src = ./.;
-            nativeBuildInputs = with pkgs; [pkg-config];
-            buildInputs = with pkgs; [libxkbcommon mpv];
+            nativeBuildInputs = with pkgs; [pkg-config rustPlatform.bindgenHook];
+            buildInputs = with pkgs; [libxkbcommon ffmpeg];
             inherit release;
           };
       in rec {
@@ -70,7 +70,11 @@
           env = [
             {
               name = "PKG_CONFIG_PATH";
-              value = "${pkgs.libxkbcommon.dev}/lib/pkgconfig:${pkgs.wayland.dev}/lib/pkgconfig:${pkgs.mpv}/lib/pkgconfig";
+              value = "${pkgs.libxkbcommon.dev}/lib/pkgconfig:${pkgs.wayland.dev}/lib/pkgconfig:${pkgs.mpv}/lib/pkgconfig:${pkgs.ffmpeg.dev}/lib/pkgconfig";
+            }
+            {
+              name = "LIBCLANG_PATH";
+              value = "${pkgs.llvmPackages.libclang.lib}/lib";
             }
           ];
 
@@ -82,15 +86,18 @@
             just
             pkg-config
             ripgrep
-            stdenv.cc
+            clang
+            # stdenv.cc
             # testing apparatus
             sway
             foot
-            nixd
             python3
             python3Packages.matplotlib
             python3Packages.tkinter
             psrecord
+
+            nixd
+            alejandra
           ];
 
           packagesFrom = [packages.default];

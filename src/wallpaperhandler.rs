@@ -51,6 +51,7 @@ pub struct Wayper {
     pub config: WayperConfig,
     pub socket_counter: u64,
     pub render_server: std::sync::Arc<RenderServer>,
+    pub last_time: u32,
 }
 
 // TODO: modularize with calloop?
@@ -153,6 +154,7 @@ impl Wayper {
                     index: 0,
                     visible: true,
                     render_server: std::sync::Arc::clone(&self.render_server),
+                    frame_count: 1,
                 },
             );
         } else {
@@ -186,8 +188,17 @@ impl CompositorHandler for Wayper {
         surface: &client::protocol::wl_surface::WlSurface,
         time: u32,
     ) {
-        debug!("framed called {:?} - {}", surface, time);
-        self.draw();
+        let dt = (time as f64 - self.last_time as f64);
+        debug!(
+            "frame called for surface {:?}, time: {}, last_time: {}, dt: {dt}",
+            surface, time, self.last_time
+        );
+        debug!("fps: {}", 1_f64 / dt * 1000_f64);
+
+        // surface.frame(_qh, surface.clone());
+        // surface.commit();
+        self.last_time = time;
+        // self.draw();
     }
 
     fn transform_changed(
@@ -311,7 +322,16 @@ impl LayerShellHandler for Wayper {
                     info!("first configure for surface {surface_id}");
                     output_guard.dimensions = Some(configure.new_size);
 
+                    self.render_server
+                        .submit_job(wayper::utils::render_server::RenderJobRequest::Video {
+                            width: configure.new_size.0,
+                            height: configure.new_size.1,
+                            frame_count: 0,
+                            video: "/home/luqman/wallpapers/notseiso/horizontal/live/starnyx_seele_live.mp4".into(),
+                        })
+                        .unwrap();
                     // first draw
+                    layer.wl_surface().frame(_qh, layer.wl_surface().clone());
                     output_guard.draw().expect("success draw");
 
                     // copy the output to another thread, then send messages through channels
@@ -333,6 +353,15 @@ impl LayerShellHandler for Wayper {
                                 previous_deadline,
                                 new_instant
                             );
+
+                            // let surface = output_handle
+                            //     .lock()
+                            //     .unwrap()
+                            //     .surface
+                            //     .as_ref()
+                            //     .unwrap()
+                            //     .clone();
+                            // surface.frame(&qh, surface.clone());
 
                             match output_handle.lock().unwrap().draw() {
                                 Ok(_) => {

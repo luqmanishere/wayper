@@ -7,16 +7,20 @@ use std::{
 };
 
 use color_eyre::eyre::Context;
+use image::EncodableLayout;
 use smithay_client_toolkit::{
     output::OutputInfo,
-    reexports::client::protocol::{wl_output::WlOutput, wl_shm, wl_surface::WlSurface},
+    reexports::client::{
+        protocol::{wl_output::WlOutput, wl_shm, wl_surface::WlSurface},
+        QueueHandle,
+    },
     shell::{wlr_layer::LayerSurface, WaylandSurface},
     shm::slot::{Buffer, SlotPool},
 };
 
 use crate::{
     config::OutputConfig,
-    utils::render_server::{RenderJobRequest, RenderServer},
+    utils::render_server::{RenderJobRequest, RenderJobResult, RenderServer},
 };
 
 // TODO: maybe all pub is not a good idea
@@ -42,6 +46,7 @@ pub struct OutputRepr {
     pub img_list: Vec<PathBuf>,
     pub visible: bool,
     pub render_server: Arc<RenderServer>,
+    pub frame_count: u32,
 }
 
 impl OutputRepr {
@@ -76,14 +81,30 @@ impl OutputRepr {
         let path = self.next();
         tracing::info!("drawing: {}", path.display());
 
-        let request = RenderJobRequest::Image {
+        // let request = RenderJobRequest::Image {
+        //     width,
+        //     height,
+        //     image: path.clone(),
+        // };
+        let request = RenderJobRequest::Video {
             width,
             height,
-            image: path.clone(),
+            video: "/home/luqman/wallpapers/notseiso/horizontal/live/starnyx_seele_live.mp4".into(),
+            frame_count: self.frame_count,
         };
 
         // only the first render will be synchronous with the request. subsequent renders are queued
-        let image = self.render_server.get_job(request);
+        let data = match self.render_server.get_job(request) {
+            RenderJobResult::Image(image_buffer) => image_buffer.as_bytes().to_vec(),
+            RenderJobResult::VideoFrame {
+                frame_number,
+                frame,
+            } => frame.data(0).to_vec(),
+            _ => {
+                panic!()
+            }
+        };
+        dbg!(&data);
 
         // check if buffer exists
         let (buffer, canvas) = if let Some(buffer) = self.buffer.take() {
@@ -119,7 +140,7 @@ impl OutputRepr {
         // Draw to the window:
         {
             let mut writer = BufWriter::new(canvas);
-            writer.write_all(image.as_raw()).unwrap();
+            writer.write_all(data.as_bytes()).unwrap();
             writer.flush().unwrap();
         }
 
@@ -142,12 +163,22 @@ impl OutputRepr {
         }
         tracing::trace!("finish drawing");
 
+        self.frame_count += 1;
+        let request = RenderJobRequest::Video {
+            width,
+            height,
+            video: "/home/luqman/wallpapers/notseiso/horizontal/live/starnyx_seele_live.mp4".into(),
+            frame_count: self.frame_count,
+        };
+        // self.render_server
+        //     .submit_job(RenderJobRequest::Image {
+        //         width,
+        //         height,
+        //         image: self.peek_next_img(),
+        //     })
+        //     .wrap_err("Error sending job to render server")?;
         self.render_server
-            .submit_job(RenderJobRequest::Image {
-                width,
-                height,
-                image: self.peek_next_img(),
-            })
+            .submit_job(request)
             .wrap_err("Error sending job to render server")?;
 
         tracing::info!("draw elapsed time: {}ms", instant.elapsed().as_millis());
