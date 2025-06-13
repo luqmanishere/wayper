@@ -1,0 +1,69 @@
+name: 'Nix Build'
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  nix-build:
+    name: Build Nix Package
+    strategy:
+      matrix:
+        image: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.image }}
+    steps:
+      - name: Maximize build space
+        uses: AdityaGarg8/remove-unwanted-software@v3
+        with:
+          remove-android: 'true'
+          remove-dotnet: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+          remove-large-packages: 'true'
+      - uses: actions/checkout@v4
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v11
+      - name: Build package
+        run: nix build 
+      # TODO: version check
+      # - name: Check version
+      #   run: nix develop --impure --accept-flake-config --command devenv "version"
+
+  nix-checks:
+    name: Checks using Nix
+    strategy:
+      matrix:
+        image: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.image }}
+    steps:
+      - name: Maximize build space
+        uses: AdityaGarg8/remove-unwanted-software@v3
+        with:
+          remove-android: 'true'
+          remove-dotnet: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+          remove-large-packages: 'true'
+      - uses: actions/checkout@v4
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v11
+
+      # use the develop shell
+      - name: Build release code
+        run: |
+          nix develop --command \
+            cargo b --release 
+      - name: Build debug code
+        run: |
+          nix develop --command \
+            cargo b
+      - name: Check code with clippy
+        run: |
+          nix develop --command \
+            cargo clippy
+      - name: Run tests
+        run: |
+          nix develop --command \
+            cargo test
