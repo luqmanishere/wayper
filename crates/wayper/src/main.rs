@@ -8,7 +8,7 @@ use smithay_client_toolkit::{
     reexports::{
         calloop::{self, EventLoop},
         calloop_wayland_source::WaylandSource,
-        client::{globals::registry_queue_init, Connection},
+        client::{Connection, globals::registry_queue_init},
     },
     registry::RegistryState,
     shell::wlr_layer::LayerShell,
@@ -16,9 +16,10 @@ use smithay_client_toolkit::{
 };
 use tracing::{info, level_filters::LevelFilter};
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{fmt, prelude::__tracing_subscriber_SubscriberExt, Layer as TLayer};
+use tracing_subscriber::{Layer as TLayer, fmt, prelude::__tracing_subscriber_SubscriberExt};
 use wallpaperhandler::Wayper;
-use wayper::{
+use wayper_lib::{
+    config::WayperConfig,
     socket::{OutputWallpaper, SocketCommands, SocketError, SocketOutput, WayperSocket},
     utils::{
         map::{OutputKey, OutputMap},
@@ -48,7 +49,7 @@ fn main() -> Result<()> {
         config_path
     };
 
-    let config = wayper::config::WayperConfig::load(&config_path)?;
+    let config = WayperConfig::load(&config_path)?;
 
     // Get the wayland details from the env, initiate the wayland event source
     let conn = Connection::connect_to_env().expect("in a wayland session");
@@ -125,60 +126,6 @@ fn main() -> Result<()> {
             .dispatch(None, &mut data)
             .expect("event loop doesn't panic");
     }
-    /*
-
-    // Setup a listener for output changes
-    // the listener will live for as long as we keep the handle alive
-    let _listener_handle =
-        env.listen_for_outputs(move |output, info, _| output_handler(output, info));
-
-    let (config_watcher_tx, config_watcher_channel): (Sender<()>, Channel<()>) =
-        calloop::channel::channel();
-    let config_watcher_config_handle = Arc::clone(&config);
-    let config_watcher_surfaces_handle = Arc::clone(&surfaces);
-    event_loop
-        .handle()
-        .insert_source(config_watcher_channel, move |_, _, _shared_data| {
-            info!("Config changed!");
-            let mut config_watcher_config_handle = config_watcher_config_handle.lock().unwrap();
-            config_watcher_config_handle.update().unwrap();
-            for (_, surface) in config_watcher_surfaces_handle.lock().unwrap().iter_mut() {
-                let mut surface = surface.lock().unwrap();
-                let new_config = config_watcher_config_handle
-                    .get_output_config(&surface.output_info.name)
-                    .unwrap();
-                surface.update_config(new_config).unwrap();
-                dbg!(&surface);
-            }
-        })
-        .unwrap();
-
-    let mut debouncer = notify_debouncer_mini::new_debouncer(
-        std::time::Duration::from_secs(10),
-        None,
-        move |res| match res {
-            Ok(o) => {
-                debug!("config watcher: {:?}", o);
-                config_watcher_tx.send(()).unwrap();
-            }
-            Err(e) => {
-                error!("config watcher: {:?}", e);
-            }
-        },
-    )?;
-    let watcher = debouncer.watcher();
-    watcher.watch(config_path, notify::RecursiveMode::Recursive)?;
-    let watcher_surfaces_handle = Arc::clone(&surfaces);
-    {
-        for (_, surface) in watcher_surfaces_handle.lock().unwrap().iter() {
-            let surface = surface.lock().unwrap();
-            watcher.watch(
-                surface.output_config.path.clone().unwrap().as_path(),
-                notify::RecursiveMode::Recursive,
-            )?;
-        }
-    }
-    */
 }
 
 #[tracing::instrument(skip_all, fields(counter = _counter))]

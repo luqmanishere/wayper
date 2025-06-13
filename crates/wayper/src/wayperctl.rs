@@ -1,11 +1,11 @@
 use std::os::unix::net::UnixStream;
 
 use clap::Parser;
-use color_eyre::eyre::{eyre, Result, WrapErr};
+use color_eyre::eyre::{Result, WrapErr, eyre};
 use tracing::{info, level_filters::LevelFilter};
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{layer::SubscriberExt, EnvFilter, Layer};
-use wayper::socket::{SocketCommands, SocketError, SocketOutput};
+use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt};
+use wayper_lib::socket::{SocketCommands, SocketError, SocketOutput};
 
 fn main() -> Result<()> {
     color_eyre::install()?;

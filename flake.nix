@@ -80,6 +80,7 @@
             python3Packages.matplotlib
             python3Packages.tkinter
             psrecord
+            cargo-machete
           ];
           inputsFrom = [packages.default];
         };

@@ -1,21 +1,20 @@
-[package]
-name = "wayper"
+[workspace]
+members = ["crates/*"]
+default-members = ["crates/wayper"]
+exclude = ["crates/wayperctl"]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.0"
-edition = "2021"
-default-run = "wayper"
+edition = "2024"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-[[bin]]
-name = "wayper"
-path = "src/main.rs"
-
-[[bin]]
-name = "wayperctl"
-path = "src/wayperctl.rs"
-
-[dependencies]
+[workspace.dependencies]
 color-eyre = "0.6"
 smithay-client-toolkit = { version = "0.19" }
+image = "0.25"
+clap = { version = "4", features = ["derive"] }
+thiserror = { version = "2" }
+
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = [
     "env-filter",
@@ -23,25 +22,7 @@ tracing-subscriber = { version = "0.3", features = [
     "time",
     "local-time",
 ] }
-image = "0.25"
-timer = "0.2"
-chrono = "0.4"
 tracing-appender = "0.2"
-walkdir = "2"
-mime_guess = "2"
-mime = "0.3"
-toml = "0.8"
-serde = { version = "1", features = ["derive", "rc"] }
-derivative = "2.2.0"
-rand = "0.9"
-notify = "8"
-notify-debouncer-mini = "0.6"
-clap = { version = "4", features = ["derive"] }
-strum = { version = "0.27", features = ["derive"] }
-serde_json = { version = "1", features = ["std"] }
-thiserror = { version = "2" }
-dashmap = { version = "7.0.0-rc2" }
-indexmap = {version = "2"}
 
 [profile.dev.package]
 # image runs too slow in debug builds. opt-level 3 helps a bit

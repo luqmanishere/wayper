@@ -1,0 +1,24 @@
+[package]
+name = "wayper"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "wayperctl"
+path = "src/wayperctl.rs"
+
+[dependencies]
+color-eyre.workspace = true
+smithay-client-toolkit.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+clap.workspace = true
+
+mime_guess = "2"
+rand = "0.9"
+timer = "0.2"
+walkdir = "2"
+
+wayper-lib = { path = "../wayper-lib" }
+

@@ -8,24 +8,23 @@ use smithay_client_toolkit::{
     output::{OutputHandler, OutputState},
     reexports::{
         calloop::{
-            self,
+            self, RegistrationToken,
             timer::{TimeoutAction, Timer},
-            RegistrationToken,
         },
         client::{Proxy, QueueHandle},
     },
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
     shell::{
-        wlr_layer::{Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler},
         WaylandSurface,
+        wlr_layer::{Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler},
     },
-    shm::{slot::SlotPool, Shm, ShmHandler},
+    shm::{Shm, ShmHandler, slot::SlotPool},
 };
 use tracing::{debug, error, info, instrument, trace, warn};
 use walkdir::WalkDir;
 
-use wayper::{
+use wayper_lib::{
     config::WayperConfig,
     utils::{
         map::{OutputKey, OutputMap},
@@ -330,8 +329,7 @@ impl LayerShellHandler for Wayper {
                                 );
                             trace!(
                                 "timer reached deadline: {:?} | new instant: {:?}",
-                                previous_deadline,
-                                new_instant
+                                previous_deadline, new_instant
                             );
 
                             match output_handle.lock().unwrap().draw() {

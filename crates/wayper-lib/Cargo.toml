@@ -1,0 +1,19 @@
+[package]
+name = "wayper-lib"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+color-eyre.workspace = true
+smithay-client-toolkit.workspace = true
+tracing.workspace = true
+image.workspace = true
+thiserror.workspace = true
+clap.workspace = true
+
+toml = "0.8"
+serde = { version = "1", features = ["derive", "rc"] }
+strum = { version = "0.27", features = ["derive"] }
+serde_json = { version = "1", features = ["std"] }
+dashmap = { version = "7.0.0-rc2" }
+indexmap = {version = "2"}

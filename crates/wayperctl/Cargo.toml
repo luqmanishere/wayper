@@ -1,0 +1,13 @@
+[package]
+name = "wayperctl"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+clap.workspace = true
+color-eyre.workspace = true
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true
+
+wayper-lib = { path = "../wayper-lib" }
