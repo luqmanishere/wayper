@@ -2,6 +2,7 @@
 name = "wayper"
 version.workspace = true
 edition.workspace = true
+default-run = "wayper"
 
 [[bin]]
 name = "wayperctl"
