@@ -14,13 +14,17 @@
   };
 
   outputs = inputs @ {
+    self,
     parts,
     devshell,
     nixpkgs,
     naersk,
     fenix,
     ...
-  }:
+  }: let
+    # crate name
+    crateName = "wayper";
+  in
     parts.lib.mkFlake {inherit inputs;} {
       systems = ["x86_64-linux" "aarch64-linux"];
       imports = [parts.flakeModules.easyOverlay devshell.flakeModule];
@@ -31,8 +35,7 @@
         lib,
         ...
       }: let
-        crateName = "wayper";
-
+        # custom toolchain for the latest stable from fenix
         toolchain = fenix.packages.${system}.stable.toolchain;
 
         naersk' = pkgs.callPackage naersk {
@@ -40,11 +43,14 @@
           rustc = toolchain;
         };
 
-        wayper = {release ? true}:
+        builder = {release ? true}:
           naersk'.buildPackage {
-            src = ./.;
+            src = self;
+
+            # dependencies required to build
             nativeBuildInputs = with pkgs; [pkg-config];
-            buildInputs = with pkgs; [libxkbcommon mpv];
+            buildInputs = with pkgs; [libxkbcommon];
+
             inherit release;
           };
       in rec {
@@ -54,98 +60,40 @@
           config.allowUnfree = true;
         };
 
-        packages.default = packages.wayper;
-        packages.wayper = packages.release;
-        packages.release = wayper {release = true;};
-        packages.debug = wayper {release = false;};
+        packages.default = packages.${crateName};
+        packages.${crateName} = packages.release;
+        packages.release = builder {release = true;};
+        packages.debug = builder {release = false;};
 
-        # use numtide/devshell
-        devshells.default = with pkgs; {
-          motd = ''
-            -----------------
-            -wayper devshell-
-            -----------------
-            $(type -p menu &>/dev/null && menu)
-          '';
-          env = [
-            {
-              name = "PKG_CONFIG_PATH";
-              value = "${pkgs.libxkbcommon.dev}/lib/pkgconfig:${pkgs.wayland.dev}/lib/pkgconfig:${pkgs.mpv}/lib/pkgconfig";
-            }
-          ];
-
-          packages = [
-            # (rust-bin.stable.latest.default.override {
-            #   extensions = ["rust-src" "rust-analyzer"];
-            # })
+        devShells.default = pkgs.mkShell {
+          nativeBuildInputs = with pkgs; [pkg-config];
+          buildInputs = with pkgs; [
             toolchain
             just
-            pkg-config
             ripgrep
             stdenv.cc
+
             # testing apparatus
             sway
             foot
-            nixd
             python3
             python3Packages.matplotlib
             python3Packages.tkinter
             psrecord
           ];
-
-          packagesFrom = [packages.default];
-
-          commands = [
-            {
-              name = "nix-run-${crateName}";
-              command = "RUST_LOG=debug nix run .#${crateName}-dev";
-              help = "Run ${crateName} (debug build)";
-              category = "Run";
-            }
-            {
-              name = "nix-run-${crateName}-rel";
-              command = "RUST_LOG=debug nix run .#${crateName}-rel";
-              help = "Run ${crateName} (release build)";
-              category = "Run";
-            }
-            {
-              name = "nix-build-${crateName}";
-              command = "RUST_LOG=debug nix build .#${crateName}-dev";
-              help = "Build ${crateName} (debug build)";
-              category = "Build";
-            }
-            {
-              name = "nix-build-${crateName}-rel";
-              command = "RUST_LOG=debug nix build .#${crateName}-rel";
-              help = "Build ${crateName} (release build)";
-              category = "Build";
-            }
-            {
-              name = "headless";
-              command = ''
-                #!/usr/bin/env bash
-
-                 hyprctl monitors | rg HEADLESS | cut -d ' ' -f 2
-              '';
-            }
-          ];
+          inputsFrom = [packages.default];
         };
-
-        # export the release package of the crate as default package
-        # packages.default = crateOutputs.packages.release;
 
         # export overlay using easyOverlays
         overlayAttrs = {
+          # dynamic variables are not allowed
           inherit (config.packages) wayper;
-          /*
-          inherit (inputs.rust-overlay.overlays) default;
-          */
         };
       };
       flake = {
         homeManagerModules = {
-          wayper = import ./nix/hm-module.nix inputs.self;
-          default = inputs.self.homeManagerModules.wayper;
+          ${crateName} = import ./nix/hm-module.nix inputs.self;
+          default = inputs.self.homeManagerModules.${crateName};
         };
       };
     };
