@@ -26,10 +26,19 @@ Config is read from `~/.config/wayper/config.toml`
 ### Example
 
 ```toml
-# table with output's name
+# set the default profile name
+default_profile = "home"
+
+# table with output's name, without a prefix is under the "default" profile
+# so this is equivalent to [default.eDP-1]
 [eDP-1]
 path = "path/to/wallpaper/folder/orfile"
 duration = 10 # duration between rerenders, or wallpaper switching in seconds
+# the minimum duration is 10 seconds
+
+[home.eDP-1]
+path = "more/wallpapers"
+duration = 20
 
 # to use profiles, nest the profile name before the output name
 [work.eDP-1]
