@@ -230,6 +230,10 @@ fn handle_stream(
                 }
             };
         }
+        SocketCommands::Profiles => {
+            SocketOutput::Profiles(wayper.config.profiles.profiles())
+                .write_to_socket(&mut stream)?;
+        }
         // TODO: toggle
         // TODO: hide
         // TODO: show

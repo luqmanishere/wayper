@@ -29,7 +29,7 @@ fn main() -> Result<()> {
             stream.shutdown(std::net::Shutdown::Write)?;
 
             let output = SocketOutput::from_socket(&mut stream)?;
-            handle_error_from_daemon(&output)?;
+            handle_error_from_daemon(&cli, &output)?;
 
             if let SocketOutput::Message(msg) = output {
                 println!("{msg}");
@@ -43,7 +43,7 @@ fn main() -> Result<()> {
             stream.shutdown(std::net::Shutdown::Write)?;
 
             let output = SocketOutput::from_socket(&mut stream)?;
-            handle_error_from_daemon(&output)?;
+            handle_error_from_daemon(&cli, &output)?;
 
             match output {
                 SocketOutput::CurrentWallpaper(output_wallpaper) => println!(
@@ -66,7 +66,7 @@ fn main() -> Result<()> {
             stream.shutdown(std::net::Shutdown::Write)?;
 
             let output = SocketOutput::from_socket(&mut stream)?;
-            handle_error_from_daemon(&output)?;
+            handle_error_from_daemon(&cli, &output)?;
 
             // TODO: output
             if let SocketOutput::Message(msg) = output {
@@ -81,25 +81,41 @@ fn main() -> Result<()> {
             stream.shutdown(std::net::Shutdown::Write)?;
 
             let output = SocketOutput::from_socket(&mut stream)?;
-            handle_error_from_daemon(&output)?;
+            handle_error_from_daemon(&cli, &output)?;
 
             if let SocketOutput::Message(msg) = output {
                 println!("{msg}");
             } else {
                 failed_to_get_response()?;
             }
+        }
+        SocketCommands::Profiles => {
+            cli.command.write_to_socket(&mut stream)?;
+            // you can write multiple things and wait for multiple things as well
+            // before shutting down our side of the socket
+            stream.shutdown(std::net::Shutdown::Write)?;
 
-            // put command specific parsing here
+            let output = SocketOutput::from_socket(&mut stream)?;
+            handle_error_from_daemon(&cli, &output)?;
+            if let SocketOutput::Profiles(ref profiles) = output {
+                if cli.json {
+                    println!("{}", output.to_json().expect("convert to json"));
+                } else {
+                    println!("Available profiles: {}", profiles.join(", "));
+                }
+            } else {
+                failed_to_get_response()?;
+            }
         }
         // this is also a template for handling commands
-        command => {
+        ref command => {
             command.write_to_socket(&mut stream)?;
             // you can write multiple things and wait for multiple things as well
             // before shutting down our side of the socket
             stream.shutdown(std::net::Shutdown::Write)?;
 
             let output = SocketOutput::from_socket(&mut stream)?;
-            handle_error_from_daemon(&output)?;
+            handle_error_from_daemon(&cli, &output)?;
             if let SocketOutput::Message(msg) = output {
                 println!("Output from command:");
                 println!("{msg}");
@@ -113,8 +129,11 @@ fn main() -> Result<()> {
 }
 
 /// Handle errors from the daemon
-fn handle_error_from_daemon(output: &SocketOutput) -> Result<(), SocketError> {
+fn handle_error_from_daemon(cli: &Cli, output: &SocketOutput) -> Result<(), SocketError> {
     if let SocketOutput::SingleError(error) = output {
+        if cli.json {
+            println!("{}", output.to_json().expect("json conversion"));
+        }
         tracing::error!("daemon returned an error: {error}");
 
         return Err(error.clone());

@@ -118,6 +118,9 @@ pub enum SocketCommands {
         /// If unspecified, the default specified in the config will be used.
         profile_name: Option<String>,
     },
+
+    /// Display a list of configured profiles
+    Profiles,
 }
 
 impl SocketCommands {
@@ -184,6 +187,7 @@ pub enum SocketOutput {
     Wallpapers(Vec<OutputWallpaper>),
     SingleError(SocketError),
     MultipleErrors(Vec<SocketError>),
+    Profiles(Vec<String>),
 }
 
 impl SocketOutput {

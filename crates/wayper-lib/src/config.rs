@@ -76,8 +76,8 @@ impl Profiles {
     }
 
     /// Returns a list of current profiles
-    pub fn profiles(&self) -> Vec<&String> {
-        self.profiles.iter().collect()
+    pub fn profiles(&self) -> Vec<String> {
+        self.profiles.iter().cloned().collect()
     }
 
     /// Insert an output config for a profile
