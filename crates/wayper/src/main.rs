@@ -115,7 +115,7 @@ fn main() -> Result<()> {
         outputs: output_map,
         config,
         c_queue_handle: event_loop.handle(),
-        timer_tokens: HashMap::new(),
+        draw_tokens: HashMap::new(),
         socket_counter: 0,
         render_server: std::sync::Arc::new(RenderServer::new()),
     };

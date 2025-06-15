@@ -7,10 +7,7 @@ use smithay_client_toolkit::{
     delegate_compositor, delegate_layer, delegate_output, delegate_registry, delegate_shm,
     output::{OutputHandler, OutputState},
     reexports::{
-        calloop::{
-            self, RegistrationToken,
-            timer::{TimeoutAction, Timer},
-        },
+        calloop::{self, RegistrationToken, timer::TimeoutAction},
         client::{Proxy, QueueHandle},
     },
     registry::{ProvidesRegistryState, RegistryState},
@@ -24,6 +21,7 @@ use smithay_client_toolkit::{
 use tracing::{debug, error, info, instrument, trace, warn};
 use walkdir::WalkDir;
 
+use wayper_lib::event_source::DrawSource;
 use wayper_lib::utils::render_server::RenderJobRequest;
 use wayper_lib::{
     config::Config,
@@ -36,7 +34,7 @@ use wayper_lib::{
 
 pub type OutputId = u32;
 /// The key should be the output id from WlOutput
-pub type TimerTokens = HashMap<OutputId, RegistrationToken>;
+pub type DrawTokens = HashMap<OutputId, RegistrationToken>;
 
 pub struct Wayper {
     pub compositor_state: CompositorState,
@@ -45,7 +43,7 @@ pub struct Wayper {
     pub layer_shell: LayerShell,
     pub shm: Shm,
     pub c_queue_handle: calloop::LoopHandle<'static, Self>,
-    pub timer_tokens: TimerTokens,
+    pub draw_tokens: DrawTokens,
 
     pub current_profile: String,
     pub outputs: OutputMap,
@@ -133,6 +131,7 @@ impl Wayper {
                     layer,
                     buffer: None,
                     first_configure: true,
+                    ping_draw: None,
                     img_list,
                     index: 0,
                     visible: true,
@@ -153,6 +152,16 @@ impl Wayper {
             return Err(color_eyre::eyre::eyre!("Profile does not exist"));
         }
 
+        if profile == self.current_profile {
+            warn!(
+                "Not changing to currently active profile {}",
+                self.current_profile
+            );
+            return Ok(());
+        }
+
+        info!("Changing current profile to: \"{profile}\"");
+
         // set the profile
         self.current_profile = profile.to_string();
 
@@ -166,15 +175,20 @@ impl Wayper {
             output.img_list = get_img_list(Some(&output_config));
             output.index = 0;
             output.output_config = Some(output_config);
-            let (width, height) = output.dimensions.unwrap_or_default();
-            // set first configure to get the first image
-            output.first_configure = true;
-            let image = output.peek_next_img();
-            output.render_server.submit_job(RenderJobRequest::Image {
-                width,
-                height,
-                image,
-            })?;
+            if let Some(ping_draw) = output.ping_draw.as_ref() {
+                ping_draw.ping();
+            } else {
+                // incase ping_draw doesnt exist, which should not happen after the first configure
+                let (width, height) = output.dimensions.unwrap_or_default();
+                // set first configure to get the first image
+                output.first_configure = true;
+                let image = output.peek_next_img();
+                output.render_server.submit_job(RenderJobRequest::Image {
+                    width,
+                    height,
+                    image,
+                })?;
+            }
         }
 
         Ok(())
@@ -306,7 +320,7 @@ impl OutputHandler for Wayper {
 
         let _removed = self.outputs.remove(OutputKey::OutputName(name.clone()));
         info!("output {name} was removed");
-        match self.timer_tokens.remove_entry(&info.id) {
+        match self.draw_tokens.remove_entry(&info.id) {
             Some((_, token)) => {
                 self.c_queue_handle.remove(token);
                 trace!("removed timer for {name}");
@@ -360,15 +374,19 @@ impl LayerShellHandler for Wayper {
                     output_guard.draw().expect("success draw");
 
                     // timer for calloop
-                    let timer = Timer::from_duration(std::time::Duration::from_secs(
-                        output_config.duration.unwrap_or(60),
-                    ));
+                    let (draw_source, ping_handle) = DrawSource::from_duration(
+                        std::time::Duration::from_secs(output_config.duration.unwrap_or(60)),
+                    )
+                    .expect("initiatable");
 
-                    let timer_token = self
+                    output_guard.ping_draw = Some(ping_handle);
+
+                    let draw_token = self
                         .c_queue_handle
-                        .insert_source(timer, move |previous_deadline, _, _data| {
+                        .insert_source(draw_source, move |previous_deadline, _, _data| {
                             // regardless of rendering time, the next deadline will be exactly
                             // n seconds later
+                            let previous_deadline = previous_deadline.get_last_deadline();
                             let new_instant = previous_deadline
                                 + std::time::Duration::from_secs(
                                     output_config.duration.unwrap_or(60),
@@ -390,7 +408,7 @@ impl LayerShellHandler for Wayper {
                             TimeoutAction::ToInstant(new_instant)
                         })
                         .expect("works");
-                    self.timer_tokens.insert(output_id, timer_token);
+                    self.draw_tokens.insert(output_id, draw_token);
                     tracing::info!("done with configure");
                     // TODO: watch dir to update config
                 } else if !output_guard.first_configure

@@ -1,28 +1,23 @@
 [eDP-1]
-name = "DP-1"
 duration = 10
-path = "/home/luqman/wallpapers/notseiso/horizontal"
+path = "samples/wallpapers/waifu"
 
 [work.eDP-1]
 duration = 10
-path = "/home/luqman/wallpapers/work"
+path = "samples/wallpapers/normal"
 
 [HEADLESS-1]
-name = "HEADLESS-1"
 duration = 20
-path = "/home/luqman/wallpapers/notseiso/horizontal"
+path = "samples/wallpapers"
 
 [HEADLESS-2]
-name = "HEADLESS-2"
 duration = 20
-path = "/home/luqman/wallpapers/notseiso/horizontal"
+path = "samples/wallpapers"
 
 [WL-2]
-name = "WL-2"
 duration = 20
-path = "/home/luqman/wallpapers/notseiso/horizontal"
+path = "samples/wallpapers"
 
 [WL-3]
-name = "WL-3"
 duration = 10
-path = "/home/luqman/wallpapers/notseiso/horizontal"
+path = "samples/wallpapers"

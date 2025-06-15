@@ -9,7 +9,10 @@ use std::{
 use color_eyre::eyre::Context;
 use smithay_client_toolkit::{
     output::OutputInfo,
-    reexports::client::protocol::{wl_output::WlOutput, wl_shm, wl_surface::WlSurface},
+    reexports::{
+        calloop,
+        client::protocol::{wl_output::WlOutput, wl_shm, wl_surface::WlSurface},
+    },
     shell::{WaylandSurface, wlr_layer::LayerSurface},
     shm::slot::{Buffer, SlotPool},
 };
@@ -32,6 +35,8 @@ pub struct OutputRepr {
     #[allow(dead_code)]
     pub scale_factor: i64,
     pub first_configure: bool,
+    /// Use to fire an instant draw command
+    pub ping_draw: Option<calloop::ping::Ping>,
 
     pub pool: SlotPool,
     pub buffer: Option<Buffer>,

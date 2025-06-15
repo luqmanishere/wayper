@@ -3,7 +3,7 @@ default:
 
 # build & run wayper with cargo
 run:
-    cargo r --release
+    cargo r --release -- -c samples/test_config.toml
 
 # build the project with nix
 build-nix:
