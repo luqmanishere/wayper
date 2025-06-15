@@ -17,6 +17,7 @@ Update 2025: I found I broke a bunch of shit idk when, now i'm fixing all that f
 - Rotate through images in a directory with set duration
 - Config hotreloads (currently in reimplementation)
 - Multi-output (displays) multi-image support
+- Profiles! Hide your waifu setup from others -_0
 
 ## Configuration
 
@@ -27,9 +28,13 @@ Config is read from `~/.config/wayper/config.toml`
 ```toml
 # table with output's name
 [eDP-1]
-name = "eDP-1" # optional
 path = "path/to/wallpaper/folder/orfile"
-duration = 10 # duration between rerenders, or wallpaper switching
+duration = 10 # duration between rerenders, or wallpaper switching in seconds
+
+# to use profiles, nest the profile name before the output name
+[work.eDP-1]
+path = "/safe/for/work/wallpapers"
+duration = 60
 ```
 
 ## Caveats
