@@ -10,7 +10,7 @@ use color_eyre::eyre::Context;
 use smithay_client_toolkit::{
     output::OutputInfo,
     reexports::client::protocol::{wl_output::WlOutput, wl_shm, wl_surface::WlSurface},
-    shell::{wlr_layer::LayerSurface, WaylandSurface},
+    shell::{WaylandSurface, wlr_layer::LayerSurface},
     shm::slot::{Buffer, SlotPool},
 };
 
@@ -48,17 +48,17 @@ impl OutputRepr {
     #[tracing::instrument(skip_all, fields(name=self.output_name))]
     pub fn update_config(&mut self, new_config: OutputConfig) {
         tracing::trace!("new config: {new_config:?}");
-        if new_config
-            .name
-            .as_ref()
-            .expect("config must have output name")
-            == &self.output_name
-        {
-            self.output_config = Some(new_config);
-            self.buffer = None;
+        // if new_config
+        //     .name
+        //     .as_ref()
+        //     .expect("config must have output name")
+        //     == &self.output_name
+        // {
+        self.output_config = Some(new_config);
+        self.buffer = None;
 
-            tracing::info!("received updated config");
-        }
+        tracing::info!("received updated config");
+        // }
     }
 
     #[tracing::instrument(skip_all, fields(name=self.output_name))]
@@ -166,7 +166,7 @@ impl OutputRepr {
     }
 
     /// get the next image, without incrementing the index
-    fn peek_next_img(&self) -> PathBuf {
+    pub fn peek_next_img(&self) -> PathBuf {
         self.img_list[self.get_next_index()].clone()
     }
 

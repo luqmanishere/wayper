@@ -1,7 +1,7 @@
 use std::{
     collections::HashSet,
     path::PathBuf,
-    sync::{mpsc::Sender, Arc, Condvar, Mutex},
+    sync::{Arc, Condvar, Mutex, mpsc::Sender},
     thread::JoinHandle,
 };
 

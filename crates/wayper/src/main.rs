@@ -19,7 +19,7 @@ use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{Layer as TLayer, fmt, prelude::__tracing_subscriber_SubscriberExt};
 use wallpaperhandler::Wayper;
 use wayper_lib::{
-    config::WayperConfig,
+    config::Config,
     socket::{OutputWallpaper, SocketCommands, SocketError, SocketOutput, WayperSocket},
     utils::{
         map::{OutputKey, OutputMap},
@@ -40,16 +40,13 @@ fn main() -> Result<()> {
     // config setup
     let config_path = if let Some(config_path) = cli.config {
         config_path
+    } else if !cfg!(debug_assertions) {
+        Path::new("/home/luqman/.config/wayper/config.toml").into()
     } else {
-        #[cfg(not(debug_assertions))]
-        let config_path = Path::new("/home/luqman/.config/wayper/config.toml").into();
-
-        #[cfg(debug_assertions)]
-        let config_path = Path::new("./samples/test_config.toml").into();
-        config_path
+        Path::new("./samples/test_config.toml").into()
     };
 
-    let config = WayperConfig::load(&config_path)?;
+    let config = Config::load_file(&config_path)?;
 
     // Get the wayland details from the env, initiate the wayland event source
     let conn = Connection::connect_to_env().expect("in a wayland session");
@@ -87,6 +84,7 @@ fn main() -> Result<()> {
                         shared_data.socket_counter,
                         stream,
                         outputs_map_handle.clone(),
+                        shared_data,
                     ) {
                         Ok(_) => {
                             tracing::debug!("stream is handled");
@@ -113,6 +111,7 @@ fn main() -> Result<()> {
         output_state,
         layer_shell,
         shm,
+        current_profile: "default".to_string(),
         outputs: output_map,
         config,
         c_queue_handle: event_loop.handle(),
@@ -129,7 +128,12 @@ fn main() -> Result<()> {
 }
 
 #[tracing::instrument(skip_all, fields(counter = _counter))]
-fn handle_stream(_counter: u64, mut stream: UnixStream, outputs: OutputMap) -> Result<()> {
+fn handle_stream(
+    _counter: u64,
+    mut stream: UnixStream,
+    outputs: OutputMap,
+    wayper: &mut Wayper,
+) -> Result<()> {
     tracing::debug!("Socket call counter: {_counter}");
     let command = SocketCommands::from_socket(&mut stream)?;
 
@@ -211,6 +215,18 @@ fn handle_stream(_counter: u64, mut stream: UnixStream, outputs: OutputMap) -> R
                 ))
                 .write_to_socket(&mut stream)?;
             }
+        }
+        SocketCommands::ChangeProfile { profile_name } => {
+            match wayper.change_profile(&profile_name) {
+                Ok(_) => {
+                    SocketOutput::Message(format!("Changed profile to: {profile_name}"))
+                        .write_to_socket(&mut stream)?;
+                }
+                Err(_err) => {
+                    SocketOutput::SingleError(SocketError::NoProfile(profile_name))
+                        .write_to_socket(&mut stream)?;
+                }
+            };
         }
         // TODO: toggle
         // TODO: hide

@@ -24,8 +24,9 @@ use smithay_client_toolkit::{
 use tracing::{debug, error, info, instrument, trace, warn};
 use walkdir::WalkDir;
 
+use wayper_lib::utils::render_server::RenderJobRequest;
 use wayper_lib::{
-    config::WayperConfig,
+    config::Config,
     utils::{
         map::{OutputKey, OutputMap},
         output::OutputRepr,
@@ -46,8 +47,9 @@ pub struct Wayper {
     pub c_queue_handle: calloop::LoopHandle<'static, Self>,
     pub timer_tokens: TimerTokens,
 
+    pub current_profile: String,
     pub outputs: OutputMap,
-    pub config: WayperConfig,
+    pub config: Config,
     pub socket_counter: u64,
     pub render_server: std::sync::Arc<RenderServer>,
 }
@@ -55,6 +57,7 @@ pub struct Wayper {
 // TODO: modularize with calloop?
 
 impl Wayper {
+    #[expect(dead_code)]
     pub fn draw(&mut self) {
         for rm in self.outputs.iter() {
             let mut v = rm.lock().unwrap();
@@ -101,7 +104,10 @@ impl Wayper {
             let pool = SlotPool::new(256 * 256 * 4, &self.shm).expect("Failed to create pool");
 
             // no config no problem
-            let output_config = match self.config.get_output_config(&name) {
+            let output_config = match self
+                .config
+                .get_output_config(&*self.current_profile, name.as_str())
+            {
                 Ok(config) => Some(config),
                 Err(e) => {
                     error!("Unable to get config for output: {e}");
@@ -109,28 +115,7 @@ impl Wayper {
                 }
             };
 
-            let img_list = if let Some(output_config) = output_config.as_ref() {
-                if output_config.path.as_ref().unwrap().is_dir() {
-                    let mut files = WalkDir::new(output_config.path.as_ref().unwrap())
-                        .into_iter()
-                        .filter(|e| {
-                            mime_guess::from_path(e.as_ref().unwrap().path())
-                                .iter()
-                                .any(|ev| ev.type_() == "image")
-                        })
-                        .map(|e| e.unwrap().path().to_owned())
-                        .collect::<Vec<_>>();
-
-                    let mut rng = rand::rng();
-                    files.shuffle(&mut rng);
-                    debug!("{:?}", &files);
-                    files
-                } else {
-                    vec![]
-                }
-            } else {
-                vec![]
-            };
+            let img_list = get_img_list(output_config.as_ref());
 
             outputs_map.insert(
                 name.clone(),
@@ -155,11 +140,72 @@ impl Wayper {
                 },
             );
         } else {
-            info!("we had this output {name} earlier, skipping....");
+            warn!("we had this output {name} earlier, skipping....");
+        }
+    }
+    pub fn change_profile(&mut self, profile: &str) -> color_eyre::Result<()> {
+        if !&self
+            .config
+            .profiles
+            .profiles()
+            .contains(&&profile.to_string())
+        {
+            return Err(color_eyre::eyre::eyre!("Profile does not exist"));
         }
 
-        // reassign the hashmap we take (took)
-        // self.outputs = Some(outputs_hashmap);
+        // set the profile
+        self.current_profile = profile.to_string();
+
+        // refresh the img list
+        for output in self.outputs.iter() {
+            let output_name = output.lock().unwrap().output_name.clone();
+
+            let output_config = self.config.get_output_config(profile, &*output_name)?;
+
+            let mut output = output.lock().unwrap();
+            output.img_list = get_img_list(Some(&output_config));
+            output.index = 0;
+            output.output_config = Some(output_config);
+            let (width, height) = output.dimensions.unwrap_or_default();
+            // set first configure to get the first image
+            output.first_configure = true;
+            let image = output.peek_next_img();
+            output.render_server.submit_job(RenderJobRequest::Image {
+                width,
+                height,
+                image,
+            })?;
+        }
+
+        Ok(())
+    }
+}
+
+/// Get a list of images from a config
+fn get_img_list(
+    output_config: Option<&wayper_lib::config::OutputConfig>,
+) -> Vec<std::path::PathBuf> {
+    if let Some(output_config) = output_config {
+        if output_config.path.is_dir() {
+            let mut files = WalkDir::new(&output_config.path)
+                .into_iter()
+                .filter(|e| {
+                    mime_guess::from_path(e.as_ref().unwrap().path())
+                        .iter()
+                        .any(|ev| ev.type_() == "image")
+                })
+                .map(|e| e.unwrap().path().to_owned())
+                .collect::<Vec<_>>();
+
+            let mut rng = rand::rng();
+            files.shuffle(&mut rng);
+            debug!("{:?}", &files);
+            files
+        } else {
+            vec![]
+        }
+    } else {
+        vec![]
     }
 }
 
@@ -186,7 +232,7 @@ impl CompositorHandler for Wayper {
         time: u32,
     ) {
         debug!("framed called {:?} - {}", surface, time);
-        self.draw();
+        // TODO: frame calls for animations
     }
 
     fn transform_changed(
@@ -313,7 +359,7 @@ impl LayerShellHandler for Wayper {
                     // first draw
                     output_guard.draw().expect("success draw");
 
-                    // copy the output to another thread, then send messages through channels
+                    // timer for calloop
                     let timer = Timer::from_duration(std::time::Duration::from_secs(
                         output_config.duration.unwrap_or(60),
                     ));

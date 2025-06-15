@@ -113,6 +113,11 @@ pub enum SocketCommands {
         #[arg(short, long)]
         output_name: Option<String>,
     },
+    /// Change profile
+    ChangeProfile {
+        #[arg(default_value = "default")]
+        profile_name: String,
+    },
 }
 
 impl SocketCommands {
@@ -144,6 +149,9 @@ pub enum SocketError {
     UnindentifiedOutput { output_name: String },
     #[error("Unexpected error occured.")]
     UnexpectedError,
+    #[error("Profile \"{0}\" is not defined.")]
+    NoProfile(String),
+
     #[error("Daemon unimplemented command: {command}")]
     CommandUnimplemented { command: String },
 
@@ -152,7 +160,9 @@ pub enum SocketError {
     CannotDeletePreviousSocket { socket_path: PathBuf, error: String },
     #[error("Unable to bind to socket at {socket_path}: {error}")]
     CannotBindUnixSocket { socket_path: PathBuf, error: String },
-    #[error("The accepted socket connection sender thread should only be called once. Socket: {socket_path}")]
+    #[error(
+        "The accepted socket connection sender thread should only be called once. Socket: {socket_path}"
+    )]
     SpawnSenderOnce { socket_path: PathBuf },
 }
 

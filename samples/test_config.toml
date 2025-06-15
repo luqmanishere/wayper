@@ -3,6 +3,10 @@ name = "DP-1"
 duration = 10
 path = "/home/luqman/wallpapers/notseiso/horizontal"
 
+[work.eDP-1]
+duration = 10
+path = "/home/luqman/wallpapers/work"
+
 [HEADLESS-1]
 name = "HEADLESS-1"
 duration = 20

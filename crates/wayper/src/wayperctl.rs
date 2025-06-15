@@ -76,6 +76,21 @@ fn main() -> Result<()> {
                 failed_to_get_response()?;
             }
         }
+        SocketCommands::ChangeProfile { .. } => {
+            cli.command.write_to_socket(&mut stream)?;
+            stream.shutdown(std::net::Shutdown::Write)?;
+
+            let output = SocketOutput::from_socket(&mut stream)?;
+            handle_error_from_daemon(&output)?;
+
+            if let SocketOutput::Message(msg) = output {
+                println!("{msg}");
+            } else {
+                failed_to_get_response()?;
+            }
+
+            // put command specific parsing here
+        }
         // this is also a template for handling commands
         command => {
             command.write_to_socket(&mut stream)?;
@@ -85,6 +100,10 @@ fn main() -> Result<()> {
 
             let output = SocketOutput::from_socket(&mut stream)?;
             handle_error_from_daemon(&output)?;
+            if let SocketOutput::Message(msg) = output {
+                println!("Output from command:");
+                println!("{msg}");
+            }
 
             // put command specific parsing here
         }

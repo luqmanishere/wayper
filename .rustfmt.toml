@@ -1,0 +1,5 @@
+reorder_imports = true
+# unstable
+# imports_granularity = "crate"
+# group_imports = 
+# merge_imports = true
