@@ -31,8 +31,12 @@ fn main() -> Result<()> {
             let output = SocketOutput::from_socket(&mut stream)?;
             handle_error_from_daemon(&cli, &output)?;
 
-            if let SocketOutput::Message(msg) = output {
-                println!("{msg}");
+            if let SocketOutput::Message(ref msg) = output {
+                if cli.json {
+                    println!("{}", output.to_json()?)
+                } else {
+                    println!("{msg}");
+                }
                 tracing::info!("{msg}");
             } else {
                 failed_to_get_response()?;
@@ -46,16 +50,26 @@ fn main() -> Result<()> {
             handle_error_from_daemon(&cli, &output)?;
 
             match output {
-                SocketOutput::CurrentWallpaper(output_wallpaper) => println!(
-                    "{}: {}",
-                    output_wallpaper.output_name, output_wallpaper.wallpaper
-                ),
-                SocketOutput::Wallpapers(output_wallpapers) => {
-                    for output_wallpaper in output_wallpapers {
+                SocketOutput::CurrentWallpaper(ref output_wallpaper) => {
+                    if cli.json {
+                        println!("{}", output.to_json()?);
+                    } else {
                         println!(
                             "{}: {}",
                             output_wallpaper.output_name, output_wallpaper.wallpaper
                         );
+                    }
+                }
+                SocketOutput::Wallpapers(ref output_wallpapers) => {
+                    for output_wallpaper in output_wallpapers {
+                        if cli.json {
+                            println!("{}", output.to_json()?);
+                        } else {
+                            println!(
+                                "{}: {}",
+                                output_wallpaper.output_name, output_wallpaper.wallpaper
+                            );
+                        }
                     }
                 }
                 _ => {}
@@ -69,8 +83,12 @@ fn main() -> Result<()> {
             handle_error_from_daemon(&cli, &output)?;
 
             // TODO: output
-            if let SocketOutput::Message(msg) = output {
-                println!("{msg}");
+            if let SocketOutput::Message(ref msg) = output {
+                if cli.json {
+                    println!("{}", output.to_json()?);
+                } else {
+                    println!("{msg}");
+                }
                 tracing::info!("{msg}");
             } else {
                 failed_to_get_response()?;
@@ -83,8 +101,12 @@ fn main() -> Result<()> {
             let output = SocketOutput::from_socket(&mut stream)?;
             handle_error_from_daemon(&cli, &output)?;
 
-            if let SocketOutput::Message(msg) = output {
-                println!("{msg}");
+            if let SocketOutput::Message(ref msg) = output {
+                if cli.json {
+                    println!("{}", output.to_json()?);
+                } else {
+                    println!("{msg}");
+                }
             } else {
                 failed_to_get_response()?;
             }
@@ -116,9 +138,12 @@ fn main() -> Result<()> {
 
             let output = SocketOutput::from_socket(&mut stream)?;
             handle_error_from_daemon(&cli, &output)?;
-            if let SocketOutput::Message(msg) = output {
-                println!("Output from command:");
-                println!("{msg}");
+            if let SocketOutput::Message(ref msg) = output {
+                if cli.json {
+                    println!("{}", output.to_json()?);
+                } else {
+                    println!("Output from command:\n{msg}");
+                }
             }
 
             // put command specific parsing here
