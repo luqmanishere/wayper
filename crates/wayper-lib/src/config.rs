@@ -8,6 +8,7 @@ use serde::Deserialize;
 
 #[derive(Clone, Debug, Default)]
 pub struct Config {
+    pub default_profile: String,
     pub profiles: Profiles,
     pub reloaded: bool,
     pub path: Option<PathBuf>,
@@ -109,9 +110,15 @@ impl OutputConfig {
     }
 }
 
+fn default_profile() -> String {
+    String::from("default")
+}
+
 /// Serializable reader struct for output config
 #[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
 struct ConfigReader {
+    #[serde(default = "default_profile")]
+    default_profile: String,
     #[serde(flatten)]
     pub outputs: HashMap<String, ProfileReader>,
 }
@@ -121,7 +128,7 @@ impl ConfigReader {
         Ok(toml::from_str(config_str)?)
     }
 
-    pub fn merge_config(&self, config: &mut Config) {
+    pub fn merge_config(self, config: &mut Config) {
         let mut profiles = Profiles::default();
         for (iden, config) in self.outputs.iter() {
             match config {
@@ -135,7 +142,9 @@ impl ConfigReader {
                 }
             }
         }
+
         config.profiles = profiles;
+        config.default_profile = self.default_profile;
     }
 }
 

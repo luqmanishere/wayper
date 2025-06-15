@@ -1,4 +1,6 @@
-[eDP-1]
+default_profile = "waifu"
+
+[waifu.eDP-1]
 duration = 10
 path = "samples/wallpapers/waifu"
 

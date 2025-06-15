@@ -113,10 +113,10 @@ pub enum SocketCommands {
         #[arg(short, long)]
         output_name: Option<String>,
     },
-    /// Change profile
+    /// Change profile to the specified one or default
     ChangeProfile {
-        #[arg(default_value = "default")]
-        profile_name: String,
+        /// If unspecified, the default specified in the config will be used.
+        profile_name: Option<String>,
     },
 }
 

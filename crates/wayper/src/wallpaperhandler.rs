@@ -142,7 +142,12 @@ impl Wayper {
             warn!("we had this output {name} earlier, skipping....");
         }
     }
-    pub fn change_profile(&mut self, profile: &str) -> color_eyre::Result<()> {
+    pub fn change_profile<'a, P>(&mut self, profile: P) -> color_eyre::Result<String>
+    where
+        P: Into<Option<String>>,
+    {
+        let profile =
+            Into::<Option<String>>::into(profile).unwrap_or(self.config.default_profile.clone());
         if !&self
             .config
             .profiles
@@ -157,7 +162,7 @@ impl Wayper {
                 "Not changing to currently active profile {}",
                 self.current_profile
             );
-            return Ok(());
+            return Ok(profile);
         }
 
         info!("Changing current profile to: \"{profile}\"");
@@ -169,7 +174,9 @@ impl Wayper {
         for output in self.outputs.iter() {
             let output_name = output.lock().unwrap().output_name.clone();
 
-            let output_config = self.config.get_output_config(profile, &*output_name)?;
+            let output_config = self
+                .config
+                .get_output_config(profile.as_str(), &*output_name)?;
 
             let mut output = output.lock().unwrap();
             output.img_list = get_img_list(Some(&output_config));
@@ -191,7 +198,7 @@ impl Wayper {
             }
         }
 
-        Ok(())
+        Ok(profile)
     }
 }
 

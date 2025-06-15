@@ -111,7 +111,7 @@ fn main() -> Result<()> {
         output_state,
         layer_shell,
         shm,
-        current_profile: "default".to_string(),
+        current_profile: config.default_profile.clone(),
         outputs: output_map,
         config,
         c_queue_handle: event_loop.handle(),
@@ -217,14 +217,16 @@ fn handle_stream(
             }
         }
         SocketCommands::ChangeProfile { profile_name } => {
-            match wayper.change_profile(&profile_name) {
-                Ok(_) => {
+            match wayper.change_profile(profile_name.clone()) {
+                Ok(profile_name) => {
                     SocketOutput::Message(format!("Changed profile to: {profile_name}"))
                         .write_to_socket(&mut stream)?;
                 }
                 Err(_err) => {
-                    SocketOutput::SingleError(SocketError::NoProfile(profile_name))
-                        .write_to_socket(&mut stream)?;
+                    SocketOutput::SingleError(SocketError::NoProfile(
+                        profile_name.unwrap_or(wayper.config.default_profile.clone()),
+                    ))
+                    .write_to_socket(&mut stream)?;
                 }
             };
         }
