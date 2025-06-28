@@ -56,6 +56,23 @@
 
             inherit release;
           };
+
+        wayper-launcher-builder = {release ? true}:
+          naersk'.buildPackage {
+            pname = "wayper-launcher";
+            name = "wayper-launcher";
+            version = "0.1.0";
+            src = self;
+
+            # dependencies required to build
+            nativeBuildInputs = with pkgs; [pkg-config];
+            buildInputs = with pkgs; [libxkbcommon];
+
+            cargoBuildOptions = x: x ++ ["--package" "wayper-launcher"];
+            cargoTestOptions = x: x ++ ["--package" "wayper-launcher"];
+
+            inherit release;
+          };
       in rec {
         _module.args.pkgs = import nixpkgs {
           inherit system;
@@ -67,6 +84,9 @@
         packages.${crateName} = packages.release;
         packages.release = builder {release = true;};
         packages.debug = builder {release = false;};
+        packages.wayper-launcher = packages.wayper-launcher-release;
+        packages.wayper-launcher-release = wayper-launcher-builder {release = true;};
+        packages.wayper-launcher-debug = wayper-launcher-builder {release = false;};
 
         devShells.default = pkgs.mkShell {
           nativeBuildInputs = with pkgs; [pkg-config];
