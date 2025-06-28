@@ -2,20 +2,14 @@
 
 use std::{
     io::{BufRead, Write},
-    os::{
-        fd::AsFd,
-        unix::net::{UnixListener, UnixStream},
-    },
+    os::unix::net::{UnixListener, UnixStream},
     path::PathBuf,
     sync::mpsc::SyncSender as StdSender,
     thread::JoinHandle,
 };
 
 use clap::Subcommand;
-use color_eyre::{
-    eyre::{WrapErr, eyre},
-    owo_colors::OwoColorize,
-};
+use color_eyre::eyre::{WrapErr, eyre};
 use serde::{Deserialize, Serialize};
 use smithay_client_toolkit::reexports::calloop::channel::Sender;
 use thiserror::Error;
@@ -291,7 +285,7 @@ impl std::fmt::Display for SocketOutput {
             SocketOutput::Message(msg) => msg.to_string(),
             SocketOutput::CurrentWallpaper(output_wallpaper) => output_wallpaper.to_string(),
             SocketOutput::Wallpapers(output_wallpapers) => output_wallpapers
-                .into_iter()
+                .iter()
                 .map(|output_wallpaper| {
                     format!(
                         "{}: {}",

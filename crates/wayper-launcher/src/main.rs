@@ -1,16 +1,14 @@
 //! This is a WIP
 
 use std::{
-    io::{BufRead, Read, Write},
+    io::{BufRead, Write},
     os::unix::net::UnixStream,
-    path::PathBuf,
     process::Stdio,
     str::FromStr,
 };
 
 use clap::Parser;
 use color_eyre::eyre::{Context, ContextCompat, eyre};
-use serde::{Deserialize, Serialize};
 use strum::VariantNames;
 use wayper_lib::socket::{SocketCommand, SocketOutput};
 
