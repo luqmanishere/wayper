@@ -2061,6 +2061,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "wayper-launcher"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "color-eyre",
+ "serde",
+ "serde_json",
+ "strum",
+ "wayper-lib",
+]
+
+[[package]]
 name = "wayper-lib"
 version = "0.1.0"
 dependencies = [

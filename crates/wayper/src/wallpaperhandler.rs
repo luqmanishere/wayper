@@ -142,7 +142,7 @@ impl Wayper {
             warn!("we had this output {name} earlier, skipping....");
         }
     }
-    pub fn change_profile<'a, P>(&mut self, profile: P) -> color_eyre::Result<String>
+    pub fn change_profile<P>(&mut self, profile: P) -> color_eyre::Result<String>
     where
         P: Into<Option<String>>,
     {
@@ -152,7 +152,7 @@ impl Wayper {
             .config
             .profiles
             .profiles()
-            .contains(&&profile.to_string())
+            .contains(&profile.to_string())
         {
             return Err(color_eyre::eyre::eyre!("Profile does not exist"));
         }

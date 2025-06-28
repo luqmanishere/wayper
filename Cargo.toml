@@ -24,6 +24,9 @@ tracing-subscriber = { version = "0.3", features = [
 ] }
 tracing-appender = "0.2"
 
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["std"] }
+
 [profile.dev.package]
 # image runs too slow in debug builds. opt-level 3 helps a bit
 image.opt-level = 3

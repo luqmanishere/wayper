@@ -5,7 +5,7 @@ use color_eyre::eyre::{Result, WrapErr, eyre};
 use tracing::{info, level_filters::LevelFilter};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt};
-use wayper_lib::socket::{SocketCommands, SocketError, SocketOutput};
+use wayper_lib::socket::{SocketCommand, SocketError, SocketOutput};
 
 fn main() -> Result<()> {
     color_eyre::install()?;
@@ -23,47 +23,35 @@ fn main() -> Result<()> {
 
     let mut stream = UnixStream::connect(&socket_path)
         .wrap_err_with(|| eyre!("could not connect to wayper socket at {socket_path}"))?;
+    cli.command.write_to_socket(&mut stream)?;
+
     match cli.command {
-        SocketCommands::Ping => {
-            cli.command.write_to_socket(&mut stream)?;
-            stream.shutdown(std::net::Shutdown::Write)?;
+        SocketCommand::Ping => {
+            let replies = SocketOutput::from_socket(&mut stream)?;
+            for reply in replies {
+                handle_error_from_daemon(&cli, &reply)?;
 
-            let output = SocketOutput::from_socket(&mut stream)?;
-            handle_error_from_daemon(&cli, &output)?;
-
-            if let SocketOutput::Message(ref msg) = output {
-                if cli.json {
-                    println!("{}", output.to_json()?)
+                if let SocketOutput::Message(ref msg) = reply {
+                    if cli.json {
+                        println!("{}", reply.to_json()?)
+                    } else {
+                        println!("{msg}");
+                    }
+                    tracing::info!("{msg}");
                 } else {
-                    println!("{msg}");
+                    failed_to_get_response()?;
                 }
-                tracing::info!("{msg}");
-            } else {
-                failed_to_get_response()?;
             }
         }
-        SocketCommands::Current { .. } => {
-            cli.command.write_to_socket(&mut stream)?;
-            stream.shutdown(std::net::Shutdown::Write)?;
+        SocketCommand::Current { .. } => {
+            let replies = SocketOutput::from_socket(&mut stream)?;
+            for reply in replies {
+                handle_error_from_daemon(&cli, &reply)?;
 
-            let output = SocketOutput::from_socket(&mut stream)?;
-            handle_error_from_daemon(&cli, &output)?;
-
-            match output {
-                SocketOutput::CurrentWallpaper(ref output_wallpaper) => {
-                    if cli.json {
-                        println!("{}", output.to_json()?);
-                    } else {
-                        println!(
-                            "{}: {}",
-                            output_wallpaper.output_name, output_wallpaper.wallpaper
-                        );
-                    }
-                }
-                SocketOutput::Wallpapers(ref output_wallpapers) => {
-                    for output_wallpaper in output_wallpapers {
+                match reply {
+                    SocketOutput::CurrentWallpaper(ref output_wallpaper) => {
                         if cli.json {
-                            println!("{}", output.to_json()?);
+                            println!("{}", reply.to_json()?);
                         } else {
                             println!(
                                 "{}: {}",
@@ -71,82 +59,87 @@ fn main() -> Result<()> {
                             );
                         }
                     }
-                }
-                _ => {}
-            };
-        }
-        SocketCommands::Toggle { .. } => {
-            cli.command.write_to_socket(&mut stream)?;
-            stream.shutdown(std::net::Shutdown::Write)?;
-
-            let output = SocketOutput::from_socket(&mut stream)?;
-            handle_error_from_daemon(&cli, &output)?;
-
-            // TODO: output
-            if let SocketOutput::Message(ref msg) = output {
-                if cli.json {
-                    println!("{}", output.to_json()?);
-                } else {
-                    println!("{msg}");
-                }
-                tracing::info!("{msg}");
-            } else {
-                failed_to_get_response()?;
+                    SocketOutput::Wallpapers(ref output_wallpapers) => {
+                        for output_wallpaper in output_wallpapers {
+                            if cli.json {
+                                println!("{}", reply.to_json()?);
+                            } else {
+                                println!(
+                                    "{}: {}",
+                                    output_wallpaper.output_name, output_wallpaper.wallpaper
+                                );
+                            }
+                        }
+                    }
+                    _ => {}
+                };
             }
         }
-        SocketCommands::ChangeProfile { .. } => {
-            cli.command.write_to_socket(&mut stream)?;
-            stream.shutdown(std::net::Shutdown::Write)?;
+        SocketCommand::Toggle { .. } => {
+            let replies = SocketOutput::from_socket(&mut stream)?;
+            for reply in replies {
+                handle_error_from_daemon(&cli, &reply)?;
 
-            let output = SocketOutput::from_socket(&mut stream)?;
-            handle_error_from_daemon(&cli, &output)?;
-
-            if let SocketOutput::Message(ref msg) = output {
-                if cli.json {
-                    println!("{}", output.to_json()?);
+                // TODO: output
+                if let SocketOutput::Message(ref msg) = reply {
+                    if cli.json {
+                        println!("{}", reply.to_json()?);
+                    } else {
+                        println!("{msg}");
+                    }
+                    tracing::info!("{msg}");
                 } else {
-                    println!("{msg}");
+                    failed_to_get_response()?;
                 }
-            } else {
-                failed_to_get_response()?;
             }
         }
-        SocketCommands::Profiles => {
-            cli.command.write_to_socket(&mut stream)?;
-            // you can write multiple things and wait for multiple things as well
-            // before shutting down our side of the socket
-            stream.shutdown(std::net::Shutdown::Write)?;
+        SocketCommand::ChangeProfile { .. } => {
+            let replies = SocketOutput::from_socket(&mut stream)?;
+            for reply in replies {
+                handle_error_from_daemon(&cli, &reply)?;
 
-            let output = SocketOutput::from_socket(&mut stream)?;
-            handle_error_from_daemon(&cli, &output)?;
-            if let SocketOutput::Profiles(ref profiles) = output {
-                if cli.json {
-                    println!("{}", output.to_json().expect("convert to json"));
+                if let SocketOutput::Message(ref msg) = reply {
+                    if cli.json {
+                        println!("{}", reply.to_json()?);
+                    } else {
+                        println!("{msg}");
+                    }
                 } else {
-                    println!("Available profiles: {}", profiles.join(", "));
+                    failed_to_get_response()?;
                 }
-            } else {
-                failed_to_get_response()?;
+            }
+        }
+        SocketCommand::Profiles => {
+            let replies = SocketOutput::from_socket(&mut stream)?;
+
+            for reply in replies {
+                handle_error_from_daemon(&cli, &reply)?;
+                if let SocketOutput::Profiles(ref profiles) = reply {
+                    if cli.json {
+                        println!("{}", reply.to_json().expect("convert to json"));
+                    } else {
+                        println!("Available profiles: {}", profiles.join(", "));
+                    }
+                } else {
+                    failed_to_get_response()?;
+                }
             }
         }
         // this is also a template for handling commands
         ref command => {
-            command.write_to_socket(&mut stream)?;
-            // you can write multiple things and wait for multiple things as well
-            // before shutting down our side of the socket
-            stream.shutdown(std::net::Shutdown::Write)?;
-
-            let output = SocketOutput::from_socket(&mut stream)?;
-            handle_error_from_daemon(&cli, &output)?;
-            if let SocketOutput::Message(ref msg) = output {
-                if cli.json {
-                    println!("{}", output.to_json()?);
-                } else {
-                    println!("Output from command:\n{msg}");
+            let replies = SocketOutput::from_socket(&mut stream)?;
+            for reply in replies {
+                handle_error_from_daemon(&cli, &reply)?;
+                if let SocketOutput::Message(ref msg) = reply {
+                    if cli.json {
+                        println!("{}", reply.to_json()?);
+                    } else {
+                        println!("Output from command {command}:\n{msg}");
+                    }
                 }
-            }
 
-            // put command specific parsing here
+                // put command specific parsing here
+            }
         }
     }
 
@@ -213,5 +206,5 @@ struct Cli {
     json: bool,
 
     #[command(subcommand)]
-    command: SocketCommands,
+    command: SocketCommand,
 }

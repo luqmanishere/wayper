@@ -46,6 +46,8 @@
         builder = {release ? true}:
           naersk'.buildPackage {
             pname = "wayper";
+            name = "wayper";
+            version = "0.1.0";
             src = self;
 
             # dependencies required to build

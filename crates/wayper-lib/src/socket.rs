@@ -1,14 +1,21 @@
 //! Code for the socket daemon and client communication
 
 use std::{
-    io::{Read, Write},
-    os::unix::net::{UnixListener, UnixStream},
+    io::{BufRead, Write},
+    os::{
+        fd::AsFd,
+        unix::net::{UnixListener, UnixStream},
+    },
     path::PathBuf,
+    sync::mpsc::SyncSender as StdSender,
     thread::JoinHandle,
 };
 
 use clap::Subcommand;
-use color_eyre::eyre::WrapErr;
+use color_eyre::{
+    eyre::{WrapErr, eyre},
+    owo_colors::OwoColorize,
+};
 use serde::{Deserialize, Serialize};
 use smithay_client_toolkit::reexports::calloop::channel::Sender;
 use thiserror::Error;
@@ -17,14 +24,14 @@ use thiserror::Error;
 pub struct WayperSocket {
     /// The path to the socket
     pub socket_path: PathBuf,
-    pub tx: Sender<UnixStream>,
+    pub tx: Sender<(SocketCommand, StdSender<SocketOutput>)>,
     spawned: bool,
     sender_thread_handle: Option<JoinHandle<Result<(), SocketError>>>,
 }
 
 impl WayperSocket {
     /// Creates a new instance of the socket.
-    pub fn new(socket_path: PathBuf, tx: Sender<UnixStream>) -> Self {
+    pub fn new(socket_path: PathBuf, tx: Sender<(SocketCommand, StdSender<SocketOutput>)>) -> Self {
         Self {
             socket_path,
             tx,
@@ -67,9 +74,32 @@ impl WayperSocket {
                 loop {
                     // loop, wait for connections, accept and handle
                     match unix_listener.accept() {
-                        Ok((unix_stream, remote_addr)) => {
+                        Ok((mut unix_stream, remote_addr)) => {
                             tracing::info!("received socket connection from {remote_addr:?}",);
-                            socket_tx.send(unix_stream).unwrap();
+                            let socket_tx = socket_tx.clone();
+
+                            std::thread::spawn(move || {
+                                tracing::info!("spawned to handle stream");
+
+                                while let Ok(socket_output) =
+                                    SocketCommand::from_socket(&mut unix_stream)
+                                {
+                                    let (reply_tx, reply_rx) =
+                                        std::sync::mpsc::sync_channel::<SocketOutput>(1);
+                                    socket_tx.send((socket_output, reply_tx)).unwrap();
+
+                                    while let Ok(res) = reply_rx.recv() {
+                                        match res.write_to_socket(&mut unix_stream) {
+                                            Ok(_) => {}
+                                            Err(err) => {
+                                                tracing::error!("error writing to socket: {}", err)
+                                            }
+                                        }
+                                    }
+                                }
+
+                                tracing::info!("stream fully handled");
+                            });
                         }
                         Err(e) => {
                             tracing::error!("failed accepting connection from unixlistener: {e}");
@@ -89,8 +119,11 @@ impl WayperSocket {
 
 /// List of commands supported by the socket. These commands and their arguments implement
 /// serialization methods to be sent across the socket.
-#[derive(Subcommand, Deserialize, Serialize, strum::Display)]
-pub enum SocketCommands {
+#[derive(
+    Subcommand, Deserialize, Serialize, strum::Display, strum::EnumString, strum::VariantNames,
+)]
+#[strum(serialize_all = "kebab-case")]
+pub enum SocketCommand {
     /// Ping the daemon, check if it's alive.
     Ping,
     /// Gets the current wallpaper
@@ -123,12 +156,18 @@ pub enum SocketCommands {
     Profiles,
 }
 
-impl SocketCommands {
+impl SocketCommand {
     pub fn from_socket(stream: &mut UnixStream) -> color_eyre::Result<Self> {
         let mut msg = String::new();
-        stream
-            .read_to_string(&mut msg)
+        let mut reader = std::io::BufReader::new(stream);
+        let read = reader
+            .read_line(&mut msg)
             .context("failed to read the stream")?;
+
+        // err if closed
+        if read == 0 {
+            return Err(eyre!("socket closed!"));
+        }
 
         tracing::debug!("message received on socket: {msg}");
 
@@ -144,7 +183,7 @@ impl SocketCommands {
     }
 }
 
-#[derive(Error, Debug, Serialize, Deserialize, Clone)]
+#[derive(Error, Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub enum SocketError {
     #[error("No current image for the output: {output}")]
     NoCurrentImage { output: String },
@@ -177,7 +216,7 @@ impl SocketError {
 
 /// Wrapper type over possible responses from the daemon. These implement serialization to
 /// be sent across the socket
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub enum SocketOutput {
     /// A string message
     Message(String),
@@ -188,6 +227,8 @@ pub enum SocketOutput {
     SingleError(SocketError),
     MultipleErrors(Vec<SocketError>),
     Profiles(Vec<String>),
+    /// Signals end of reply for the previous request.
+    End(String),
 }
 
 impl SocketOutput {
@@ -210,21 +251,82 @@ impl SocketOutput {
     }
 
     /// Gets the output from the socket stream, parse it into [`Self`]
-    pub fn from_socket(stream: &mut UnixStream) -> color_eyre::Result<Self> {
+    pub fn from_socket(stream: &mut UnixStream) -> color_eyre::Result<Vec<Self>> {
+        let mut reader = std::io::BufReader::new(stream);
         let mut response = String::new();
-        stream.read_to_string(&mut response)?;
-        tracing::debug!("socket replied with response: {response}");
-        Self::from_json(&response)
+        let mut vec = vec![];
+
+        loop {
+            response.clear();
+            let read = reader.read_line(&mut response)?;
+
+            // TODO: trim?
+
+            if read == 0 {
+                return Err(eyre!("socket closed"));
+            }
+
+            tracing::debug!("socket replied with response: {response}");
+
+            let output = Self::from_json(&response)?;
+            if let SocketOutput::End(_) = output {
+                break;
+            } else {
+                vec.push(output);
+            }
+        }
+        Ok(vec)
+    }
+}
+
+impl From<SocketError> for SocketOutput {
+    fn from(value: SocketError) -> Self {
+        SocketOutput::SingleError(value)
+    }
+}
+
+impl std::fmt::Display for SocketOutput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
+            SocketOutput::Message(msg) => msg.to_string(),
+            SocketOutput::CurrentWallpaper(output_wallpaper) => output_wallpaper.to_string(),
+            SocketOutput::Wallpapers(output_wallpapers) => output_wallpapers
+                .into_iter()
+                .map(|output_wallpaper| {
+                    format!(
+                        "{}: {}",
+                        output_wallpaper.output_name, output_wallpaper.wallpaper
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+            SocketOutput::SingleError(socket_error) => socket_error.to_string(),
+            SocketOutput::MultipleErrors(socket_errors) => socket_errors
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("\n"),
+            SocketOutput::Profiles(items) => items.join("\n"),
+            SocketOutput::End(command) => format!("end of command {command}"),
+        };
+
+        write!(f, "{text}")
     }
 }
 
 /// Struct for wallpaper info from the daemon
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, PartialEq, Eq)]
 pub struct OutputWallpaper {
     /// The name of the output
     pub output_name: String,
     /// The path to the wallpaper
     pub wallpaper: String,
+}
+
+impl std::fmt::Display for OutputWallpaper {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.output_name, self.wallpaper)
+    }
 }
 
 /// Helper function. Writes a string to the stream. It is required to manually shutdown the stream
@@ -234,8 +336,9 @@ fn write_to_stream(stream: &mut UnixStream, mut s: String) -> color_eyre::Result
         s.push('\n');
     }
     stream
-        .write(s.as_bytes())
+        .write_all(s.as_bytes())
         .wrap_err("failed to write to socket stream")?;
+    stream.flush()?;
     tracing::debug!("wrote to socket stream: {}", s.trim());
     Ok(())
 }

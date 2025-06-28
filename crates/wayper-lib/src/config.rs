@@ -138,7 +138,7 @@ impl ConfigReader {
                         .for_each(|e| profiles.insert(Some(iden), e.0, e.1.clone()));
                 }
                 ProfileReader::Default(output_config) => {
-                    profiles.insert(Some("default"), iden, output_config.clone());
+                    profiles.insert(Some(&self.default_profile), iden, output_config.clone());
                 }
             }
         }

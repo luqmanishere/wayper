@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::Deref, os::unix::net::UnixStream, path::Path};
+use std::{collections::HashMap, ops::Deref, path::Path, sync::mpsc::SyncSender};
 
 use clap::{Parser, ValueEnum};
 use color_eyre::Result;
@@ -6,7 +6,7 @@ use smithay_client_toolkit::{
     compositor::CompositorState,
     output::OutputState,
     reexports::{
-        calloop::{self, EventLoop},
+        calloop::{self, EventLoop, channel::Event},
         calloop_wayland_source::WaylandSource,
         client::{Connection, globals::registry_queue_init},
     },
@@ -20,7 +20,7 @@ use tracing_subscriber::{Layer as TLayer, fmt, prelude::__tracing_subscriber_Sub
 use wallpaperhandler::Wayper;
 use wayper_lib::{
     config::Config,
-    socket::{OutputWallpaper, SocketCommands, SocketError, SocketOutput, WayperSocket},
+    socket::{OutputWallpaper, SocketCommand, SocketError, SocketOutput, WayperSocket},
     utils::{
         map::{OutputKey, OutputMap},
         output::OutputRepr,
@@ -68,40 +68,40 @@ fn main() -> Result<()> {
     let output_map: OutputMap = Default::default();
 
     // channel based event source for our socket
-    let (socket_tx, socket_channel) = calloop::channel::channel::<UnixStream>();
+    let (socket_tx, socket_channel) =
+        calloop::channel::channel::<(SocketCommand, SyncSender<SocketOutput>)>();
     let mut socket = WayperSocket::new("/tmp/wayper/.socket.sock".into(), socket_tx);
 
-    let outputs_map_handle = output_map.clone();
     // insert the channel receiver as a source in calloop
     event_loop
         .handle()
         .insert_source(socket_channel, move |ev, _, shared_data| {
             tracing::debug!("stream received from listener");
             match ev {
-                calloop::channel::Event::Msg(stream) => {
+                Event::Msg((socket_command, stream)) => {
                     shared_data.socket_counter += 1;
-                    match handle_stream(
+
+                    match handle_command(
                         shared_data.socket_counter,
+                        socket_command,
                         stream,
-                        outputs_map_handle.clone(),
                         shared_data,
                     ) {
                         Ok(_) => {
-                            tracing::debug!("stream is handled");
+                            tracing::debug!("command is handled");
                         }
                         Err(e) => {
-                            tracing::error!("error handling stream: {e}");
+                            tracing::error!("error handling command: {e}");
                         }
                     }
                 }
-                calloop::channel::Event::Closed => {
+                Event::Closed => {
                     tracing::error!("socket input listener channel is closed!");
                 }
             }
         })
         .unwrap();
 
-    // TODO: remove this
     // keep this alive until the end of the program
     let _socket_listener = socket.socket_sender_thread();
 
@@ -128,20 +128,20 @@ fn main() -> Result<()> {
 }
 
 #[tracing::instrument(skip_all, fields(counter = _counter))]
-fn handle_stream(
+fn handle_command(
     _counter: u64,
-    mut stream: UnixStream,
-    outputs: OutputMap,
+    socket_command: SocketCommand,
+    reply_tx: SyncSender<SocketOutput>,
     wayper: &mut Wayper,
 ) -> Result<()> {
     tracing::debug!("Socket call counter: {_counter}");
-    let command = SocketCommands::from_socket(&mut stream)?;
+    let mut socket_responses = vec![];
+    let outputs = &wayper.outputs;
+    let command_name = socket_command.to_string();
 
-    match command {
-        SocketCommands::Ping => {
-            SocketOutput::Message("pong".to_string()).write_to_socket(&mut stream)?;
-        }
-        SocketCommands::Current { output_name } => {
+    match socket_command {
+        SocketCommand::Ping => socket_responses.push(SocketOutput::Message("pong".to_string())),
+        SocketCommand::Current { output_name } => {
             /// Get the current image for the output and wrap it
             fn get_output_current_image(
                 output: &OutputRepr,
@@ -163,13 +163,14 @@ fn handle_stream(
                 match outputs.get(OutputKey::OutputName(output_name.clone())) {
                     Some(output) => {
                         match get_output_current_image(output.lock().unwrap().deref()) {
-                            Ok(outwp) => SocketOutput::CurrentWallpaper(outwp)
-                                .write_to_socket(&mut stream)?,
-                            Err(error) => error.write_to_socket(&mut stream)?,
+                            Ok(outwp) => {
+                                socket_responses.push(SocketOutput::CurrentWallpaper(outwp))
+                            }
+                            Err(error) => socket_responses.push(error.into()),
                         }
                     }
-                    None => SocketError::UnindentifiedOutput { output_name }
-                        .write_to_socket(&mut stream)?,
+                    None => socket_responses
+                        .push(SocketError::UnindentifiedOutput { output_name }.into()),
                 }
             } else {
                 // i would use iterators here if i could, but i cant figure this out
@@ -182,25 +183,24 @@ fn handle_stream(
                         Err(error) => errors.push(error),
                     }
                 }
-                SocketOutput::Wallpapers(output_wallpapers).write_to_socket(&mut stream)?;
+                socket_responses.push(SocketOutput::Wallpapers(output_wallpapers));
                 // TODO: figure out how to send multi frame responses
-                // SocketOutput::MultipleErrors(errors).write_to_socket(&mut stream)?;
+                socket_responses.push(SocketOutput::MultipleErrors(errors));
             }
         }
-        SocketCommands::Toggle { output_name } => {
+        SocketCommand::Toggle { output_name } => {
             if let Some(output_name) = output_name {
                 match outputs.get(OutputKey::OutputName(output_name.clone())) {
                     Some(output) => {
                         let mut output = output.lock().unwrap();
                         output.toggle_visible();
-                        SocketOutput::Message(format!(
+                        socket_responses.push(SocketOutput::Message(format!(
                             "Toggled visibility for output {}",
                             output.output_name
-                        ))
-                        .write_to_socket(&mut stream)?;
+                        )));
                     }
-                    None => SocketError::UnindentifiedOutput { output_name }
-                        .write_to_socket(&mut stream)?,
+                    None => socket_responses
+                        .push(SocketError::UnindentifiedOutput { output_name }.into()),
                 }
             } else {
                 let mut toggled = vec![];
@@ -209,40 +209,35 @@ fn handle_stream(
                     output.toggle_visible();
                     toggled.push(output.output_name.clone());
                 }
-                SocketOutput::Message(format!(
+                socket_responses.push(SocketOutput::Message(format!(
                     "Toggled visibility for outputs {}",
                     toggled.join(", ")
-                ))
-                .write_to_socket(&mut stream)?;
+                )));
             }
         }
-        SocketCommands::ChangeProfile { profile_name } => {
+        SocketCommand::ChangeProfile { profile_name } => {
             match wayper.change_profile(profile_name.clone()) {
-                Ok(profile_name) => {
-                    SocketOutput::Message(format!("Changed profile to: {profile_name}"))
-                        .write_to_socket(&mut stream)?;
-                }
+                Ok(profile_name) => socket_responses.push(SocketOutput::Message(format!(
+                    "Changed profile to: {profile_name}"
+                ))),
                 Err(_err) => {
-                    SocketOutput::SingleError(SocketError::NoProfile(
+                    socket_responses.push(SocketOutput::SingleError(SocketError::NoProfile(
                         profile_name.unwrap_or(wayper.config.default_profile.clone()),
-                    ))
-                    .write_to_socket(&mut stream)?;
+                    )))
                 }
             };
         }
-        SocketCommands::Profiles => {
-            SocketOutput::Profiles(wayper.config.profiles.profiles())
-                .write_to_socket(&mut stream)?;
+        SocketCommand::Profiles => {
+            socket_responses.push(SocketOutput::Profiles(wayper.config.profiles.profiles()))
         }
-        // TODO: toggle
         // TODO: hide
         // TODO: show
-        command => {
+        command => socket_responses.push(
             SocketError::CommandUnimplemented {
                 command: command.to_string(),
             }
-            .write_to_socket(&mut stream)?;
-        }
+            .into(),
+        ),
     }
     // else if msg == "toggle" {
     //     for (_, surface) in outputs.lock().unwrap().iter_mut() {
@@ -257,6 +252,12 @@ fn handle_stream(
     //         surface.lock().unwrap().show();
     //     }
     // }
+
+    socket_responses.push(SocketOutput::End(command_name));
+    for response in socket_responses {
+        reply_tx.send(response)?;
+    }
+
     Ok(())
 }
 

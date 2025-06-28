@@ -2,8 +2,11 @@ default:
     just --list
 
 # build & run wayper with cargo
-run:
+run-release:
     cargo r --release -- -c samples/test_config.toml
+
+run-ldebug:
+    cargo r -- -l debug -c samples/test_config.toml
 
 # build the project with nix
 build-nix:

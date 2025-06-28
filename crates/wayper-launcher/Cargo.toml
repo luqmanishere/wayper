@@ -1,19 +1,13 @@
 [package]
-name = "wayper-lib"
+name = "wayper-launcher"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
+wayper-lib = { path = "../wayper-lib" }
 color-eyre.workspace = true
-smithay-client-toolkit.workspace = true
-tracing.workspace = true
-image.workspace = true
-thiserror.workspace = true
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
-toml = "0.8"
 strum = { version = "0.27", features = ["derive"] }
-dashmap = { version = "7.0.0-rc2" }
-indexmap = {version = "2"}
