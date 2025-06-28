@@ -54,6 +54,9 @@
             nativeBuildInputs = with pkgs; [pkg-config];
             buildInputs = with pkgs; [libxkbcommon];
 
+            cargoBuildOptions = x: x ++ ["--package" "wayper"];
+            cargoTestOptions = x: x ++ ["--package" "wayper"];
+
             inherit release;
           };
 
