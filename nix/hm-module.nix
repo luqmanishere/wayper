@@ -19,7 +19,7 @@ in {
       default =
         self.packages.${pkgs.stdenv.hostPlatform.system}.wayper;
     };
-    enableFuzzelIntegration = mkEnableOption "Use the fuzzel launcher to control the daemon";
+    enableFuzzelIntegration = mkEnableOption "Use the fuzzel launcher to control the daemon. Enables the fuzzel hm option.";
     config = {
       default-profile = mkOption {
         description = "the default profile";
@@ -93,7 +93,7 @@ in {
         self.packages.${pkgs.stdenv.hostPlatform.system}.wayper-launcher
       ];
 
-      package.fuzzel.enable = true;
+      programs.fuzzel.enable = true;
     })
   ];
 }
