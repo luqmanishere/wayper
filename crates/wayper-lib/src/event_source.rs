@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use smithay_client_toolkit::reexports::calloop;
+use calloop;
 
 pub struct DrawSource {
     timer: calloop::timer::Timer,

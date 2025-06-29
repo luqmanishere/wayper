@@ -2046,10 +2046,14 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "color-eyre",
+ "dashmap",
+ "image",
+ "indexmap",
  "mime_guess",
  "rand 0.9.1",
  "shlex",
  "smithay-client-toolkit",
+ "strum",
  "timer",
  "tracing",
  "tracing-appender",
@@ -2074,14 +2078,11 @@ dependencies = [
 name = "wayper-lib"
 version = "0.1.0"
 dependencies = [
+ "calloop",
  "clap",
  "color-eyre",
- "dashmap",
- "image",
- "indexmap",
  "serde",
  "serde_json",
- "smithay-client-toolkit",
  "strum",
  "thiserror 2.0.12",
  "toml",

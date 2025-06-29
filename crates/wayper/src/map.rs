@@ -1,3 +1,5 @@
+#![expect(dead_code)]
+
 //! A tri-key map to store output data
 
 use std::sync::{Arc, Mutex, RwLock};

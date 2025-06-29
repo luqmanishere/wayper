@@ -8,10 +8,10 @@ use std::{
     thread::JoinHandle,
 };
 
+use calloop::channel::Sender;
 use clap::Subcommand;
 use color_eyre::eyre::{WrapErr, eyre};
 use serde::{Deserialize, Serialize};
-use smithay_client_toolkit::reexports::calloop::channel::Sender;
 use thiserror::Error;
 
 /// Helper struct for socket management

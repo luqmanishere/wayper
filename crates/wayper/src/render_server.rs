@@ -1,3 +1,5 @@
+//! Render server to handle off thread rendering
+
 use std::{
     collections::HashSet,
     path::PathBuf,
@@ -101,6 +103,7 @@ impl RenderServer {
         }
     }
 
+    #[expect(dead_code)]
     /// Get a cloned copy of the [`Sender`]
     pub fn get_new_tx(&self) -> Sender<RenderJobRequest> {
         self.jobs_sender_tx.clone()
@@ -148,6 +151,7 @@ impl Drop for RenderServer {
     }
 }
 
+#[expect(dead_code)]
 #[derive(Debug)]
 pub enum RenderNotify {
     UpdateDim { width: u32, height: u32 },

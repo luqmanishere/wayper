@@ -1,4 +1,6 @@
-//! Output data representation
+#![expect(dead_code)]
+
+//! Output. Data and processing happens here
 
 use std::{
     io::{BufWriter, Write},
@@ -17,10 +19,9 @@ use smithay_client_toolkit::{
     shm::slot::{Buffer, SlotPool},
 };
 
-use crate::{
-    config::OutputConfig,
-    utils::render_server::{RenderJobRequest, RenderServer},
-};
+use wayper_lib::config::OutputConfig;
+
+use crate::render_server::{RenderJobRequest, RenderServer};
 
 // TODO: maybe all pub is not a good idea
 
@@ -50,6 +51,7 @@ pub struct OutputRepr {
 impl OutputRepr {
     #[tracing::instrument(skip_all, fields(name=self.output_name))]
     pub fn update_config(&mut self, new_config: OutputConfig) {
+        // TODO: implement daemon config update
         tracing::trace!("new config: {new_config:?}");
         // if new_config
         //     .name

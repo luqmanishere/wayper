@@ -22,15 +22,13 @@ use smithay_client_toolkit::{
 use tracing::{debug, error, info, instrument, trace, warn};
 use walkdir::WalkDir;
 
+use wayper_lib::config::Config;
 use wayper_lib::event_source::DrawSource;
-use wayper_lib::utils::render_server::RenderJobRequest;
-use wayper_lib::{
-    config::Config,
-    utils::{
-        map::{OutputKey, OutputMap},
-        output::OutputRepr,
-        render_server::RenderServer,
-    },
+
+use crate::render_server::{RenderJobRequest, RenderServer};
+use crate::{
+    map::{OutputKey, OutputMap},
+    output::OutputRepr,
 };
 
 pub type OutputId = u32;

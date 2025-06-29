@@ -21,13 +21,17 @@ use wallpaperhandler::Wayper;
 use wayper_lib::{
     config::Config,
     socket::{OutputWallpaper, SocketCommand, SocketError, SocketOutput, WayperSocket},
-    utils::{
-        map::{OutputKey, OutputMap},
-        output::OutputRepr,
-        render_server::RenderServer,
-    },
 };
 
+use crate::{
+    map::{OutputKey, OutputMap},
+    output::OutputRepr,
+    render_server::RenderServer,
+};
+
+mod map;
+mod output;
+mod render_server;
 mod wallpaperhandler;
 
 fn main() -> Result<()> {
