@@ -5,7 +5,7 @@ self: {
   ...
 }: let
   inherit (builtins) toString;
-  inherit (lib.types) int str package listOf submodule;
+  inherit (lib.types) int str nullOr package listOf submodule;
   inherit (lib.modules) mkIf mkMerge;
   inherit (lib.options) mkOption mkEnableOption;
   inherit (lib.meta) getExe;
@@ -48,6 +48,11 @@ in {
               type = str;
               default = "/home/example/wallpapers";
             };
+            run_command = mkOption {
+              description = "command to run when image is switched";
+              type = nullOr str;
+              default = null;
+            };
           };
         });
         default = [{}];
@@ -67,6 +72,11 @@ in {
             [${monitor.profile}.${monitor.name}]
             duration = ${toString monitor.duration}
             path = "${monitor.path}"
+            ${
+              if monitor.run_command != null
+              then "run_command = ${monitor.run_command}"
+              else ""
+            }
           '')
           cfg.config.monitorConfigs)}
       '';
