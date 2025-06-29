@@ -74,7 +74,7 @@ in {
             path = "${monitor.path}"
             ${
               if monitor.run_command != null
-              then "run_command = ${monitor.run_command}"
+              then "run_command = \"${monitor.run_command}\""
               else ""
             }
           '')
