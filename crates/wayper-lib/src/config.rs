@@ -96,6 +96,7 @@ impl Profiles {
 pub struct OutputConfig {
     pub duration: Option<u64>,
     pub path: PathBuf,
+    pub run_command: Option<String>,
 }
 
 impl OutputConfig {
@@ -171,6 +172,7 @@ mod tests {
             [eDP-1]
             duration = 10
             path = "/home/user/wallpapers/personal"
+            run_command = "matugen image {image}"
 
             [HDMI-A-1]
             duration = 20
@@ -194,13 +196,15 @@ mod tests {
             OutputConfig {
                 duration: Some(10),
                 path: "/home/user/wallpapers/personal".into(),
+                run_command: Some(String::from("matugen image {image}")),
             },
         );
         assert_eq!(
             config.get_output_config("work", "eDP-1").unwrap(),
             OutputConfig {
                 duration: Some(10),
-                path: "/home/user/wallpapers/work".into()
+                path: "/home/user/wallpapers/work".into(),
+                run_command: None
             }
         );
 

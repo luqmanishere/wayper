@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io::Read;
 
 use rand::seq::SliceRandom;
 use smithay_client_toolkit::reexports::client;
@@ -378,7 +379,7 @@ impl LayerShellHandler for Wayper {
                     output_guard.dimensions = Some(configure.new_size);
 
                     // first draw
-                    output_guard.draw().expect("success draw");
+                    // output_guard.draw().expect("success draw");
 
                     // timer for calloop
                     let (draw_source, ping_handle) = DrawSource::from_duration(
@@ -386,11 +387,13 @@ impl LayerShellHandler for Wayper {
                     )
                     .expect("initiatable");
 
+                    ping_handle.ping();
                     output_guard.ping_draw = Some(ping_handle);
 
                     let draw_token = self
                         .c_queue_handle
                         .insert_source(draw_source, move |previous_deadline, _, _data| {
+                            let instant = std::time::Instant::now();
                             // regardless of rendering time, the next deadline will be exactly
                             // n seconds later
                             let previous_deadline = previous_deadline.get_last_deadline();
@@ -403,14 +406,76 @@ impl LayerShellHandler for Wayper {
                                 previous_deadline, new_instant
                             );
 
-                            match output_handle.lock().unwrap().draw() {
-                                Ok(_) => {
+                            let mut lock = output_handle.lock().unwrap();
+                            match lock.draw() {
+                                Ok(path) => {
                                     tracing::info!("draw success");
+                                    if let Some(config) = &lock.output_config
+                                        && let Some(command) = &config.run_command
+                                    {
+                                        let mut command =
+                                            shlex::Shlex::new(command).collect::<Vec<_>>();
+
+                                        // drop immediately
+                                        drop(lock);
+
+                                        // rudimentary substitution that I can't figure out how to do in place
+                                        for arg in command.iter_mut() {
+                                            if arg == "{image}" {
+                                                arg.clear();
+                                                arg.push_str(&path.display().to_string());
+                                            }
+                                        }
+
+                                        tracing::info!("running command {}", command.join(" "));
+
+                                        // let chains wooooo
+                                        if let Some((command, args)) = command.split_first()
+                                            && let Ok((mut pipe_reader, pipe_writer)) =
+                                                std::io::pipe()
+                                            && let Ok(mut  child) =
+                                                std::process::Command::new(command)
+                                                    .args(args)
+                                                    .stderr(
+                                                        pipe_writer
+                                                            .try_clone()
+                                                            .expect("pipe writer cannot be cloned"),
+                                                    )
+                                                    .stdout(pipe_writer)
+                                                    .spawn()
+                                        {
+                                            std::thread::spawn(move || {
+                                                let mut buf = String::new();
+                                                pipe_reader
+                                                    .read_to_string(&mut buf)
+                                                    .expect("readable pipe");
+                                                let buf = buf.trim();
+
+                                                if !buf.is_empty() {
+                                                    tracing::warn!("color_command output:\n{buf}");
+                                                }
+
+                                                if let Ok(exit_status) = child.wait()
+                                                    && !exit_status.success()
+                                                {
+                                                    tracing::error!(
+                                                        "command exited with code {:?}",
+                                                        exit_status.code()
+                                                    );
+                                                } else {
+                                                    tracing::info!("command executed successfully");
+                                                }
+                                            });
+                                        } else {
+                                            tracing::error!("command run error, check if the command exists and is correct");
+                                        }
+                                    }
                                 }
                                 Err(e) => {
                                     tracing::error!("draw failed with error: {e}");
                                 }
                             }
+                            tracing::debug!("processing time: {} ms", (std::time::Instant::now() - instant).as_millis());
 
                             TimeoutAction::ToInstant(new_instant)
                         })

@@ -3,6 +3,8 @@ default_profile = "waifu"
 [waifu.eDP-1]
 duration = 10
 path = "samples/wallpapers/waifu"
+run_command = "matugen image {image} -m dark"
+# run_command = "wal -n -i {image} -e --cols16"
 
 [work.eDP-1]
 duration = 10

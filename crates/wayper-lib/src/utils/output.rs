@@ -27,12 +27,10 @@ use crate::{
 #[derive(Debug)]
 pub struct OutputRepr {
     pub output_name: String,
-    #[allow(dead_code)]
     pub wl_repr: WlOutput,
     pub output_info: OutputInfo,
     pub output_config: Option<OutputConfig>,
     pub dimensions: Option<(u32, u32)>,
-    #[allow(dead_code)]
     pub scale_factor: i64,
     pub first_configure: bool,
     /// Use to fire an instant draw command
@@ -66,12 +64,13 @@ impl OutputRepr {
         // }
     }
 
+    /// Returns the rendered path
     #[tracing::instrument(skip_all, fields(name=self.output_name))]
-    pub fn draw(&mut self) -> color_eyre::Result<()> {
+    pub fn draw(&mut self) -> color_eyre::Result<PathBuf> {
         let instant = std::time::Instant::now();
         if !self.visible {
             tracing::debug!("Not visible, not drawing");
-            return Ok(());
+            return Ok(Default::default());
         }
 
         tracing::trace!("begin drawing");
@@ -156,7 +155,7 @@ impl OutputRepr {
             .wrap_err("Error sending job to render server")?;
 
         tracing::info!("draw elapsed time: {}ms", instant.elapsed().as_millis());
-        Ok(())
+        Ok(path)
     }
 
     /// Increment the index and give the image. If its the first configure, it uses

@@ -2048,6 +2048,7 @@ dependencies = [
  "color-eyre",
  "mime_guess",
  "rand 0.9.1",
+ "shlex",
  "smithay-client-toolkit",
  "timer",
  "tracing",

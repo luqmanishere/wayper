@@ -18,6 +18,7 @@ Update 2025: I found I broke a bunch of shit idk when, now i'm fixing all that f
 - Config hotreloads (currently in reimplementation)
 - Multi-output (displays) multi-image support
 - Profiles! Hide your waifu setup from others -_0
+- Command execution - run commands with the current image
 
 ## Configuration
 
@@ -33,8 +34,8 @@ default_profile = "home"
 # so this is equivalent to [default.eDP-1]
 [eDP-1]
 path = "path/to/wallpaper/folder/orfile"
-duration = 10 # duration between rerenders, or wallpaper switching in seconds
-# the minimum duration is 10 seconds
+duration = 10 # duration between rerenders, or wallpaper switching in seconds. minimum is 10
+run_command = "wal -n -i {image} -e --cols16" # run pywal16 after switching images
 
 [home.eDP-1]
 path = "more/wallpapers"
