@@ -94,7 +94,7 @@ impl OutputMap {
     }
 
     /// Get an iterator over the underlying collection
-    pub fn iter(&self) -> OutputMapIter {
+    pub fn iter(&self) -> OutputMapIter<'_> {
         OutputMapIter {
             map: self,
             index: 0,
