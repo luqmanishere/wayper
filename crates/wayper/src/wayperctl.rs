@@ -1,6 +1,6 @@
 use std::os::unix::net::UnixStream;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use tracing::{info, level_filters::LevelFilter};
 use tracing_appender::non_blocking::WorkerGuard;
@@ -8,6 +8,7 @@ use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt};
 use wayper_lib::socket::{SocketCommand, SocketError, SocketOutput};
 
 fn main() -> Result<()> {
+    clap_complete::CompleteEnv::with_factory(|| Cli::command().bin_name("wayperctl")).complete();
     color_eyre::install()?;
 
     // Do not drop the guards until the program exists
@@ -23,123 +24,137 @@ fn main() -> Result<()> {
 
     let mut stream = UnixStream::connect(&socket_path)
         .wrap_err_with(|| eyre!("could not connect to wayper socket at {socket_path}"))?;
-    cli.command.write_to_socket(&mut stream)?;
 
     match cli.command {
-        SocketCommand::Ping => {
-            let replies = SocketOutput::from_socket(&mut stream)?;
-            for reply in replies {
-                handle_error_from_daemon(&cli, &reply)?;
+        Commands::Socket(ref command) => {
+            command.write_to_socket(&mut stream)?;
+            match command {
+                SocketCommand::Ping => {
+                    let replies = SocketOutput::from_socket(&mut stream)?;
+                    for reply in replies {
+                        handle_error_from_daemon(&cli, &reply)?;
 
-                if let SocketOutput::Message(ref msg) = reply {
-                    if cli.json {
-                        println!("{}", reply.to_json()?)
-                    } else {
-                        println!("{msg}");
-                    }
-                    tracing::info!("{msg}");
-                } else {
-                    failed_to_get_response()?;
-                }
-            }
-        }
-        SocketCommand::Current { .. } => {
-            let replies = SocketOutput::from_socket(&mut stream)?;
-            for reply in replies {
-                handle_error_from_daemon(&cli, &reply)?;
-
-                match reply {
-                    SocketOutput::CurrentWallpaper(ref output_wallpaper) => {
-                        if cli.json {
-                            println!("{}", reply.to_json()?);
+                        if let SocketOutput::Message(ref msg) = reply {
+                            if cli.json {
+                                println!("{}", reply.to_json()?)
+                            } else {
+                                println!("{msg}");
+                            }
+                            tracing::info!("{msg}");
                         } else {
-                            println!(
-                                "{}: {}",
-                                output_wallpaper.output_name, output_wallpaper.wallpaper
-                            );
+                            failed_to_get_response()?;
                         }
                     }
-                    SocketOutput::Wallpapers(ref output_wallpapers) => {
-                        for output_wallpaper in output_wallpapers {
+                }
+                SocketCommand::Current { .. } => {
+                    let replies = SocketOutput::from_socket(&mut stream)?;
+                    for reply in replies {
+                        handle_error_from_daemon(&cli, &reply)?;
+
+                        match reply {
+                            SocketOutput::CurrentWallpaper(ref output_wallpaper) => {
+                                if cli.json {
+                                    println!("{}", reply.to_json()?);
+                                } else {
+                                    println!(
+                                        "{}: {}",
+                                        output_wallpaper.output_name, output_wallpaper.wallpaper
+                                    );
+                                }
+                            }
+                            SocketOutput::Wallpapers(ref output_wallpapers) => {
+                                for output_wallpaper in output_wallpapers {
+                                    if cli.json {
+                                        println!("{}", reply.to_json()?);
+                                    } else {
+                                        println!(
+                                            "{}: {}",
+                                            output_wallpaper.output_name,
+                                            output_wallpaper.wallpaper
+                                        );
+                                    }
+                                }
+                            }
+                            _ => {}
+                        };
+                    }
+                }
+                SocketCommand::Toggle { .. } => {
+                    let replies = SocketOutput::from_socket(&mut stream)?;
+                    for reply in replies {
+                        handle_error_from_daemon(&cli, &reply)?;
+
+                        // TODO: output
+                        if let SocketOutput::Message(ref msg) = reply {
                             if cli.json {
                                 println!("{}", reply.to_json()?);
                             } else {
-                                println!(
-                                    "{}: {}",
-                                    output_wallpaper.output_name, output_wallpaper.wallpaper
-                                );
+                                println!("{msg}");
                             }
+                            tracing::info!("{msg}");
+                        } else {
+                            failed_to_get_response()?;
                         }
                     }
-                    _ => {}
-                };
-            }
-        }
-        SocketCommand::Toggle { .. } => {
-            let replies = SocketOutput::from_socket(&mut stream)?;
-            for reply in replies {
-                handle_error_from_daemon(&cli, &reply)?;
-
-                // TODO: output
-                if let SocketOutput::Message(ref msg) = reply {
-                    if cli.json {
-                        println!("{}", reply.to_json()?);
-                    } else {
-                        println!("{msg}");
-                    }
-                    tracing::info!("{msg}");
-                } else {
-                    failed_to_get_response()?;
                 }
-            }
-        }
-        SocketCommand::ChangeProfile { .. } => {
-            let replies = SocketOutput::from_socket(&mut stream)?;
-            for reply in replies {
-                handle_error_from_daemon(&cli, &reply)?;
+                SocketCommand::ChangeProfile { .. } => {
+                    let replies = SocketOutput::from_socket(&mut stream)?;
+                    for reply in replies {
+                        handle_error_from_daemon(&cli, &reply)?;
 
-                if let SocketOutput::Message(ref msg) = reply {
-                    if cli.json {
-                        println!("{}", reply.to_json()?);
-                    } else {
-                        println!("{msg}");
+                        if let SocketOutput::Message(ref msg) = reply {
+                            if cli.json {
+                                println!("{}", reply.to_json()?);
+                            } else {
+                                println!("{msg}");
+                            }
+                        } else {
+                            failed_to_get_response()?;
+                        }
                     }
-                } else {
-                    failed_to_get_response()?;
                 }
-            }
-        }
-        SocketCommand::Profiles => {
-            let replies = SocketOutput::from_socket(&mut stream)?;
+                SocketCommand::Profiles => {
+                    let replies = SocketOutput::from_socket(&mut stream)?;
 
-            for reply in replies {
-                handle_error_from_daemon(&cli, &reply)?;
-                if let SocketOutput::Profiles(ref profiles) = reply {
-                    if cli.json {
-                        println!("{}", reply.to_json().expect("convert to json"));
-                    } else {
-                        println!("Available profiles: {}", profiles.join(", "));
+                    for reply in replies {
+                        handle_error_from_daemon(&cli, &reply)?;
+                        if let SocketOutput::Profiles(ref profiles) = reply {
+                            if cli.json {
+                                println!("{}", reply.to_json().expect("convert to json"));
+                            } else {
+                                println!("Available profiles: {}", profiles.join(", "));
+                            }
+                        } else {
+                            failed_to_get_response()?;
+                        }
                     }
-                } else {
-                    failed_to_get_response()?;
+                }
+                // this is also a template for handling commands
+                ref command => {
+                    let replies = SocketOutput::from_socket(&mut stream)?;
+                    for reply in replies {
+                        handle_error_from_daemon(&cli, &reply)?;
+                        if let SocketOutput::Message(ref msg) = reply {
+                            if cli.json {
+                                println!("{}", reply.to_json()?);
+                            } else {
+                                println!("Output from command {command}:\n{msg}");
+                            }
+                        }
+
+                        // put command specific parsing here
+                    }
                 }
             }
         }
-        // this is also a template for handling commands
-        ref command => {
-            let replies = SocketOutput::from_socket(&mut stream)?;
-            for reply in replies {
-                handle_error_from_daemon(&cli, &reply)?;
-                if let SocketOutput::Message(ref msg) = reply {
-                    if cli.json {
-                        println!("{}", reply.to_json()?);
-                    } else {
-                        println!("Output from command {command}:\n{msg}");
-                    }
-                }
-
-                // put command specific parsing here
-            }
+        Commands::Completions { shell } => {
+            println!("{shell}");
+            clap_complete::generate(
+                clap_complete::shells::Fish,
+                &mut Cli::command(),
+                "wayperctl",
+                &mut std::io::stdout(),
+            );
         }
     }
 
@@ -206,5 +221,13 @@ struct Cli {
     json: bool,
 
     #[command(subcommand)]
-    command: SocketCommand,
+    command: Commands,
+}
+
+#[derive(clap::Subcommand)]
+enum Commands {
+    #[command(flatten)]
+    Socket(SocketCommand),
+    /// Generate shell completions for a supported shell.
+    Completions { shell: clap_complete::Shell },
 }

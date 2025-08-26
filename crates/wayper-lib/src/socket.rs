@@ -10,6 +10,7 @@ use std::{
 
 use calloop::channel::Sender;
 use clap::Subcommand;
+use clap_complete::{ArgValueCandidates, CompletionCandidate};
 use color_eyre::eyre::{WrapErr, eyre};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -143,11 +144,27 @@ pub enum SocketCommand {
     /// Change profile to the specified one or default
     ChangeProfile {
         /// If unspecified, the default specified in the config will be used.
+        #[arg(add = ArgValueCandidates::new(|| profiles_from_socket_or_config()))]
         profile_name: Option<String>,
     },
 
     /// Display a list of configured profiles
     Profiles,
+}
+
+fn profiles_from_socket_or_config() -> Vec<CompletionCandidate> {
+    const SOCKET_PATH: &str = "/tmp/wayper/.socket.sock";
+    let path = std::path::Path::new(SOCKET_PATH);
+    if path.exists()
+        && let Ok(mut stream) = UnixStream::connect(path)
+        && let Ok(_) = SocketCommand::Profiles.write_to_socket(&mut stream)
+        && let Ok(replies) = SocketOutput::from_socket(&mut stream)
+        && let Some(SocketOutput::Profiles(profiles)) = replies.first()
+    {
+        profiles.iter().map(CompletionCandidate::new).collect()
+    } else {
+        vec![]
+    }
 }
 
 impl SocketCommand {

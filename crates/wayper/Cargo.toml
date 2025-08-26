@@ -9,22 +9,21 @@ name = "wayperctl"
 path = "src/wayperctl.rs"
 
 [dependencies]
-color-eyre.workspace = true
-smithay-client-toolkit.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true
-tracing-appender.workspace = true
 clap.workspace = true
+clap_complete = { version = "4", features = ["unstable-dynamic"] }
+color-eyre.workspace = true
+dashmap = { version = "7.0.0-rc2" }
 image.workspace = true
-strum.workspace = true
-
+indexmap = { version = "2" }
 mime_guess = "2"
 rand = "0.9"
-timer = "0.2"
-walkdir = "2"
 shlex = "1"
-dashmap = { version = "7.0.0-rc2" }
-indexmap = {version = "2"}
-
+smithay-client-toolkit.workspace = true
+strum.workspace = true
+timer = "0.2"
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true
+walkdir = "2"
 wayper-lib = { path = "../wayper-lib" }
 
