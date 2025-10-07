@@ -16,14 +16,19 @@ dashmap = { version = "7.0.0-rc2" }
 image.workspace = true
 indexmap = { version = "2" }
 mime_guess = "2"
+pollster = { version = "0.4.0" }
 rand = "0.9"
+raw-window-handle = { version = "0.6" }
 shlex = "1"
 smithay-client-toolkit.workspace = true
 strum.workspace = true
 timer = "0.2"
 tracing.workspace = true
 tracing-appender.workspace = true
+tracing-log = { version = "0.2" }
 tracing-subscriber.workspace = true
 walkdir = "2"
+wayland-backend = { version = "*", features = ["client_system"] }
+wayland-sys = { version = "*" }
 wayper-lib = { path = "../wayper-lib" }
-
+wgpu = { version = "27" }

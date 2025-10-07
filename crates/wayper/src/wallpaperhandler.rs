@@ -25,10 +25,13 @@ use walkdir::WalkDir;
 use wayper_lib::config::Config;
 use wayper_lib::event_source::DrawSource;
 
-use crate::render_server::{RenderJobRequest, RenderServer};
 use crate::{
     map::{OutputKey, OutputMap},
     output::OutputRepr,
+};
+use crate::{
+    render_server::{RenderJobRequest, RenderServer},
+    wgpu_renderer::WgpuRenderer,
 };
 
 pub type OutputId = u32;
@@ -49,6 +52,8 @@ pub struct Wayper {
     pub config: Config,
     pub socket_counter: u64,
     pub render_server: std::sync::Arc<RenderServer>,
+
+    pub wgpu: WgpuRenderer,
 }
 
 // TODO: modularize with calloop?
@@ -99,6 +104,13 @@ impl Wayper {
             layer.commit();
 
             let pool = SlotPool::new(256 * 256 * 4, &self.shm).expect("Failed to create pool");
+            self.wgpu
+                .new_surface(
+                    name.clone(),
+                    _conn.backend().display_ptr(),
+                    layer.wl_surface().id().as_ptr(),
+                )
+                .unwrap();
 
             // no config no problem
             let output_config = match self
@@ -360,6 +372,57 @@ impl LayerShellHandler for Wayper {
         configure: smithay_client_toolkit::shell::wlr_layer::LayerSurfaceConfigure,
         _serial: u32,
     ) {
+        let (new_width, new_height) = configure.new_size;
+
+        let adapter = self.wgpu.adapter.as_ref().unwrap();
+        let Some((_key, surface)) = &self.wgpu.map.iter().next() else {
+            panic!("no surface configured")
+        };
+        let device = self.wgpu.device.as_ref().unwrap();
+        let queue = self.wgpu.queue.as_ref().unwrap();
+
+        let cap = surface.get_capabilities(adapter);
+        let surface_config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: cap.formats[0],
+            view_formats: vec![cap.formats[0]],
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            width: new_width,
+            height: new_height,
+            desired_maximum_frame_latency: 2,
+            present_mode: wgpu::PresentMode::Mailbox,
+        };
+        surface.configure(device, &surface_config);
+
+        let surface_texture = surface
+            .get_current_texture()
+            .expect("failed to acquire next swapchain texture");
+        let texture_view = surface_texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &texture_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLUE),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+        }
+        queue.submit(Some(encoder.finish()));
+        surface_texture.present();
+
+        /*
         // this function is called on instantiate and when there are dimension changes
         tracing::info!("received configure for {}", layer.wl_surface().id());
         let surface_id = layer.wl_surface().id();
@@ -494,6 +557,7 @@ impl LayerShellHandler for Wayper {
                 }
             }
         }
+        */
     }
 }
 

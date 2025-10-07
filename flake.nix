@@ -91,9 +91,9 @@
         packages.wayper-launcher-release = wayper-launcher-builder {release = true;};
         packages.wayper-launcher-debug = wayper-launcher-builder {release = false;};
 
-        devShells.default = pkgs.mkShell {
-          nativeBuildInputs = with pkgs; [pkg-config];
-          buildInputs = with pkgs; [
+        devShells.default =
+         let 
+         buildInputs = with pkgs; [
             toolchain
             just
             ripgrep
@@ -107,8 +107,23 @@
             python3Packages.tkinter
             psrecord
             cargo-machete
+
+             libxkbcommon
+    wayland xorg.libX11 xorg.libXcursor xorg.libXrandr xorg.libXi
+    libGL
+    vulkan-headers vulkan-loader
+    vulkan-tools vulkan-tools-lunarg
+    vulkan-extension-layer
+    vulkan-validation-layers
           ];
+         in 
+           pkgs.mkShell {
+          nativeBuildInputs = with pkgs; [pkg-config];
+          inherit buildInputs;
           inputsFrom = [packages.default];
+          shellHook = ''
+            export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:${builtins.toString (pkgs.lib.makeLibraryPath buildInputs)}";
+          '';
         };
 
         # export overlay using easyOverlays

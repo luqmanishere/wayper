@@ -16,6 +16,7 @@ use smithay_client_toolkit::{
 };
 use tracing::{info, level_filters::LevelFilter};
 use tracing_appender::non_blocking::WorkerGuard;
+use tracing_log::LogTracer;
 use tracing_subscriber::{Layer as TLayer, fmt, prelude::__tracing_subscriber_SubscriberExt};
 use wallpaperhandler::Wayper;
 use wayper_lib::{
@@ -27,12 +28,14 @@ use crate::{
     map::{OutputKey, OutputMap},
     output::OutputRepr,
     render_server::RenderServer,
+    wgpu_renderer::WgpuRenderer,
 };
 
 mod map;
 mod output;
 mod render_server;
 mod wallpaperhandler;
+mod wgpu_renderer;
 
 fn main() -> Result<()> {
     color_eyre::install()?;
@@ -122,6 +125,7 @@ fn main() -> Result<()> {
         draw_tokens: HashMap::new(),
         socket_counter: 0,
         render_server: std::sync::Arc::new(RenderServer::new()),
+        wgpu: WgpuRenderer::new(),
     };
 
     loop {
@@ -129,6 +133,7 @@ fn main() -> Result<()> {
             .dispatch(None, &mut data)
             .expect("event loop doesn't panic");
     }
+    drop(data.wgpu);
 }
 
 #[tracing::instrument(skip_all, fields(counter = _counter))]
@@ -288,6 +293,7 @@ fn start_logging(file_log_level: LogLevel) -> Vec<WorkerGuard> {
         );
 
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
+    LogTracer::init().expect("logger facade initialized");
     info!("logger started!");
     guards
 }
