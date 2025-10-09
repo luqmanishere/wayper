@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::io::Read;
 
+use image::{self, GenericImageView};
 use rand::seq::SliceRandom;
 use smithay_client_toolkit::reexports::client;
 use smithay_client_toolkit::{
@@ -8,7 +8,7 @@ use smithay_client_toolkit::{
     delegate_compositor, delegate_layer, delegate_output, delegate_registry, delegate_shm,
     output::{OutputHandler, OutputState},
     reexports::{
-        calloop::{self, RegistrationToken, timer::TimeoutAction},
+        calloop::{self, RegistrationToken},
         client::{Proxy, QueueHandle},
     },
     registry::{ProvidesRegistryState, RegistryState},
@@ -23,7 +23,6 @@ use tracing::{debug, error, info, instrument, trace, warn};
 use walkdir::WalkDir;
 
 use wayper_lib::config::Config;
-use wayper_lib::event_source::DrawSource;
 
 use crate::{
     map::{OutputKey, OutputMap},
@@ -54,6 +53,7 @@ pub struct Wayper {
     pub render_server: std::sync::Arc<RenderServer>,
 
     pub wgpu: WgpuRenderer,
+    pub image_bind_group: Option<wgpu::BindGroup>,
 }
 
 // TODO: modularize with calloop?
@@ -263,8 +263,64 @@ impl CompositorHandler for Wayper {
         surface: &client::protocol::wl_surface::WlSurface,
         time: u32,
     ) {
-        debug!("framed called {:?} - {}", surface, time);
-        // TODO: frame calls for animations
+        debug!("frame called {:?} - {}", surface, time);
+
+        // Always try to render the quad for testing
+        debug!("Frame function called, attempting to render");
+        if let Some(bind_group) = &self.image_bind_group {
+            debug!("Rendering image texture in frame function");
+            let wgpu = &self.wgpu;
+            let device = wgpu.device.as_ref().unwrap();
+            let queue = wgpu.queue.as_ref().unwrap();
+            let Some((surface_key, wgpu_surface)) = &wgpu.map.iter().next() else {
+                debug!("No wgpu surface found in frame function");
+                return;
+            };
+            debug!("Using wgpu surface: {}", surface_key);
+            let render_pipeline = wgpu.image_pipeline.as_ref().unwrap();
+            let vertex_buffer = wgpu.vertex_buffer.as_ref().unwrap();
+            let index_buffer = wgpu.index_buffer.as_ref().unwrap();
+
+            let surface_texture = wgpu_surface
+                .get_current_texture()
+                .expect("failed to acquire next swapchain texture");
+            let surface_view = surface_texture
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+
+            let mut encoder = device.create_command_encoder(&Default::default());
+            {
+                let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Image Render Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &surface_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+
+                debug!("Setting up render pass for texture rendering");
+                render_pass.set_pipeline(render_pipeline);
+                render_pass.set_bind_group(0, bind_group, &[]);
+                render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+                debug!("Drawing textured quad: 6 indices");
+                render_pass.draw_indexed(0..6, 0, 0..1);
+            }
+            queue.submit(Some(encoder.finish()));
+            surface_texture.present();
+
+            // Request the next frame
+        } else {
+            debug!("No image bind group available for rendering");
+        }
     }
 
     fn transform_changed(
@@ -373,44 +429,131 @@ impl LayerShellHandler for Wayper {
         _serial: u32,
     ) {
         let (new_width, new_height) = configure.new_size;
+        debug!("Configure called with size: {}x{}", new_width, new_height);
 
-        let adapter = self.wgpu.adapter.as_ref().unwrap();
-        let Some((_key, surface)) = &self.wgpu.map.iter().next() else {
+        let surface_format = {
+            let adapter = self.wgpu.adapter.as_ref().unwrap();
+            let Some((_key, surface)) = &self.wgpu.map.iter().next() else {
+                panic!("no surface configured")
+            };
+            let device = self.wgpu.device.as_ref().unwrap();
+
+            let cap = surface.get_capabilities(adapter);
+            let surface_format = cap.formats[0];
+            let surface_config = wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format: surface_format,
+                view_formats: vec![surface_format],
+                alpha_mode: wgpu::CompositeAlphaMode::Auto,
+                width: new_width,
+                height: new_height,
+                desired_maximum_frame_latency: 2,
+                present_mode: wgpu::PresentMode::Mailbox,
+            };
+            surface.configure(device, &surface_config);
+            surface_format
+        };
+
+        // Initialize the render pipeline if not already done
+        self.wgpu
+            .init_image_pipeline(surface_format)
+            .expect("Failed to initialize image pipeline");
+
+        // Get references to the cached pipeline resources
+        let wgpu = &self.wgpu;
+        let device = wgpu.device.as_ref().unwrap();
+        let queue = wgpu.queue.as_ref().unwrap();
+        let Some((_key, surface)) = &wgpu.map.iter().next() else {
             panic!("no surface configured")
         };
-        let device = self.wgpu.device.as_ref().unwrap();
-        let queue = self.wgpu.queue.as_ref().unwrap();
+        let bind_group_layout = wgpu.bind_group_layout.as_ref().unwrap();
+        let sampler = wgpu.sampler.as_ref().unwrap();
 
-        let cap = surface.get_capabilities(adapter);
-        let surface_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: cap.formats[0],
-            view_formats: vec![cap.formats[0]],
-            alpha_mode: wgpu::CompositeAlphaMode::Auto,
-            width: new_width,
-            height: new_height,
-            desired_maximum_frame_latency: 2,
-            present_mode: wgpu::PresentMode::Mailbox,
+        // Load the image from file
+        let img = image::open("samples/wallpapers/waifu/cartethyia-official.jpg")
+            .expect("path exists")
+            .resize_to_fill(new_width, new_height, image::imageops::FilterType::Lanczos3);
+        let rgba = img.to_rgba8();
+        let (img_width, img_height) = img.dimensions();
+        debug!("Loaded image: {}x{} pixels", img_width, img_height);
+
+        let texture_size = wgpu::Extent3d {
+            width: img_width,
+            height: img_height,
+            depth_or_array_layers: 1,
         };
-        surface.configure(device, &surface_config);
 
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Image Texture"),
+            size: texture_size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        // Write the image data to the texture
+        debug!("Writing texture data: {} bytes", rgba.len());
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * img_width),
+                rows_per_image: Some(img_height),
+            },
+            texture_size,
+        );
+        debug!("Texture data written successfully");
+
+        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        debug!("Creating bind group with texture view");
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&texture_view),
+                },
+            ],
+            label: Some("Image Bind Group"),
+        });
+        debug!("Bind group created successfully");
+
+        // Store the bind group for use in frame function
+        self.image_bind_group = Some(bind_group);
+        debug!("Stored image bind group in configure function");
+
+        // Initial clear of the surface
         let surface_texture = surface
             .get_current_texture()
             .expect("failed to acquire next swapchain texture");
-        let texture_view = surface_texture
+        let surface_view = surface_texture
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
         let mut encoder = device.create_command_encoder(&Default::default());
         {
             let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: None,
+                label: Some("Initial Clear"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &texture_view,
+                    view: &surface_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLUE),
-                        store: wgpu::StoreOp::Store,
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Discard,
                     },
                     depth_slice: None,
                 })],
@@ -422,6 +565,9 @@ impl LayerShellHandler for Wayper {
         queue.submit(Some(encoder.finish()));
         surface_texture.present();
 
+        layer.wl_surface().frame(_qh, layer.wl_surface().clone());
+        layer.wl_surface().commit();
+        debug!("finished configure, frame queued");
         /*
         // this function is called on instantiate and when there are dimension changes
         tracing::info!("received configure for {}", layer.wl_surface().id());

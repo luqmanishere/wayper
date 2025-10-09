@@ -9,6 +9,7 @@ name = "wayperctl"
 path = "src/wayperctl.rs"
 
 [dependencies]
+bytemuck = { version = "1" }
 clap.workspace = true
 clap_complete = { version = "4", features = ["unstable-dynamic"] }
 color-eyre.workspace = true
