@@ -1,5 +1,3 @@
-#![expect(dead_code)]
-
 //! Output. Data and processing happens here
 
 use std::{
@@ -45,6 +43,8 @@ pub struct OutputRepr {
     pub index: usize,
     pub img_list: Vec<PathBuf>,
     pub visible: bool,
+    pub should_next: bool,
+    pub last_render_instant: std::time::Instant,
     pub render_server: Arc<RenderServer>,
 }
 
@@ -162,7 +162,7 @@ impl OutputRepr {
 
     /// Increment the index and give the image. If its the first configure, it uses
     /// an index of 0
-    fn next(&mut self) -> PathBuf {
+    pub fn next(&mut self) -> PathBuf {
         let img_list = &self.img_list;
         tracing::debug!("Current index is {}", self.index);
         self.index = self.get_next_index();

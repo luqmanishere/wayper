@@ -126,7 +126,6 @@ fn main() -> Result<()> {
         socket_counter: 0,
         render_server: std::sync::Arc::new(RenderServer::new()),
         wgpu: WgpuRenderer::new(),
-        image_bind_group: None,
     };
 
     loop {

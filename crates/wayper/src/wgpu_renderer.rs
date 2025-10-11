@@ -1,5 +1,7 @@
-use std::ptr::NonNull;
+//! The wgpu renderer
+use std::{path::Path, ptr::NonNull};
 
+use image::GenericImageView;
 use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
 };
@@ -16,11 +18,17 @@ pub struct WgpuRenderer {
     pub vertex_buffer: Option<wgpu::Buffer>,
     pub index_buffer: Option<wgpu::Buffer>,
     pub sampler: Option<wgpu::Sampler>,
+    /// Texture management - cache textures by image path + size
+    pub texture_cache: FastHashMap<String, wgpu::Texture>,
+    pub bind_group_cache: FastHashMap<String, wgpu::BindGroup>,
+    pub surface_configs: FastHashMap<String, wgpu::SurfaceConfiguration>,
+    // TODO: proper keys
 }
 
 impl WgpuRenderer {
     pub fn new() -> Self {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            // TODO: support for other platforms via winit for debugging
             backends: wgpu::Backends::all(),
             ..Default::default()
         });
@@ -35,6 +43,9 @@ impl WgpuRenderer {
             vertex_buffer: None,
             index_buffer: None,
             sampler: None,
+            texture_cache: Default::default(),
+            bind_group_cache: Default::default(),
+            surface_configs: Default::default(),
         }
     }
 
@@ -75,8 +86,14 @@ impl WgpuRenderer {
         Ok(())
     }
 
-    pub fn init_image_pipeline(&mut self, surface_format: wgpu::TextureFormat) -> color_eyre::Result<()> {
-        let device = self.device.as_ref().ok_or_else(|| color_eyre::eyre::eyre!("Device not initialized"))?;
+    pub fn init_image_pipeline(
+        &mut self,
+        surface_format: wgpu::TextureFormat,
+    ) -> color_eyre::Result<()> {
+        let device = self
+            .device
+            .as_ref()
+            .ok_or_else(|| color_eyre::eyre::eyre!("Device not initialized"))?;
 
         if self.image_pipeline.is_some() {
             return Ok(());
@@ -174,13 +191,10 @@ impl WgpuRenderer {
 
         // Create quad vertices as flat array (position and UV coordinates)
         let vertices: &[f32] = &[
-            // Bottom-left: pos(-1, -1), uv(0, 1)
-            -1.0, -1.0, 0.0, 1.0,
-            // Bottom-right: pos(1, -1), uv(1, 1)
-            1.0, -1.0, 1.0, 1.0,
-            // Top-right: pos(1, 1), uv(1, 0)
-            1.0, 1.0, 1.0, 0.0,
-            // Top-left: pos(-1, 1), uv(0, 0)
+            // bottom-left: pos(-1, -1), uv(0, 1)
+            -1.0, -1.0, 0.0, 1.0, // bottom-right: pos(1, -1), uv(1, 1)
+            1.0, -1.0, 1.0, 1.0, // top-right: pos(1, 1), uv(1, 0)
+            1.0, 1.0, 1.0, 0.0, // top-left: pos(-1, 1), uv(0, 0)
             -1.0, 1.0, 0.0, 0.0,
         ];
 
@@ -216,5 +230,275 @@ impl WgpuRenderer {
 
         println!("Image pipeline initialized successfully");
         Ok(())
+    }
+
+    /// Generate cache key from image path and target size
+    fn cache_key(image_path: &Path, target_size: (u32, u32)) -> String {
+        format!(
+            "{}@{}x{}",
+            image_path.display(),
+            target_size.0,
+            target_size.1
+        )
+    }
+
+    /// Load an image and create a wgpu texture from it
+    pub fn load_image_texture(
+        &mut self,
+        image_path: &Path,
+        target_size: (u32, u32),
+    ) -> color_eyre::Result<&wgpu::Texture> {
+        let device = self
+            .device
+            .as_ref()
+            .ok_or_else(|| color_eyre::eyre::eyre!("Device not initialized"))?;
+        let queue = self
+            .queue
+            .as_ref()
+            .ok_or_else(|| color_eyre::eyre::eyre!("Queue not initialized"))?;
+
+        let cache_key = Self::cache_key(image_path, target_size);
+
+        // Check if texture is already cached
+        if self.texture_cache.contains_key(&cache_key) {
+            return Ok(self.texture_cache.get(&cache_key).unwrap());
+        }
+
+        // Load and resize the image
+        let img = image::open(image_path)?.resize_to_fill(
+            target_size.0,
+            target_size.1,
+            image::imageops::FilterType::Lanczos3,
+        );
+        let rgba = img.to_rgba8();
+        let (img_width, img_height) = img.dimensions();
+
+        let texture_size = wgpu::Extent3d {
+            width: img_width,
+            height: img_height,
+            depth_or_array_layers: 1,
+        };
+
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Image Texture"),
+            size: texture_size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        // Write the image data to the texture
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * img_width),
+                rows_per_image: Some(img_height),
+            },
+            texture_size,
+        );
+
+        // Cache the texture
+        self.texture_cache.insert(cache_key.clone(), texture);
+        Ok(self.texture_cache.get(&cache_key).unwrap())
+    }
+
+    /// Get or create a bind group for a texture
+    pub fn get_or_create_bind_group(&mut self, cache_key: &str) -> color_eyre::Result<()> {
+        // Check if bind group is already cached
+        if self.bind_group_cache.contains_key(cache_key) {
+            return Ok(());
+        }
+
+        let device = self
+            .device
+            .as_ref()
+            .ok_or_else(|| color_eyre::eyre::eyre!("Device not initialized"))?;
+        let bind_group_layout = self
+            .bind_group_layout
+            .as_ref()
+            .ok_or_else(|| color_eyre::eyre::eyre!("Bind group layout not initialized"))?;
+        let sampler = self
+            .sampler
+            .as_ref()
+            .ok_or_else(|| color_eyre::eyre::eyre!("Sampler not initialized"))?;
+        let texture = self
+            .texture_cache
+            .get(cache_key)
+            .ok_or_else(|| color_eyre::eyre::eyre!("Texture not found in cache"))?;
+
+        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&texture_view),
+                },
+            ],
+            label: Some("Image Bind Group"),
+        });
+
+        // Cache the bind group
+        self.bind_group_cache
+            .insert(cache_key.to_string(), bind_group);
+        Ok(())
+    }
+
+    /// Configure surface for a specific output
+    pub fn configure_surface(
+        &mut self,
+        output_name: &str,
+        size: (u32, u32),
+    ) -> color_eyre::Result<wgpu::TextureFormat> {
+        let adapter = self
+            .adapter
+            .as_ref()
+            .ok_or_else(|| color_eyre::eyre::eyre!("Adapter not initialized"))?;
+        let device = self
+            .device
+            .as_ref()
+            .ok_or_else(|| color_eyre::eyre::eyre!("Device not initialized"))?;
+        let surface = self.map.get(output_name).ok_or_else(|| {
+            color_eyre::eyre::eyre!("Surface not found for output: {}", output_name)
+        })?;
+
+        let caps = surface.get_capabilities(adapter);
+        let surface_format = caps.formats[0];
+
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: surface_format,
+            view_formats: vec![surface_format],
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            width: size.0,
+            height: size.1,
+            desired_maximum_frame_latency: 2,
+            present_mode: wgpu::PresentMode::Mailbox,
+        };
+
+        surface.configure(device, &config);
+        self.surface_configs.insert(output_name.to_string(), config);
+
+        Ok(surface_format)
+    }
+
+    /// Prepare texture and bind group for an image
+    pub fn prepare_image(
+        &mut self,
+        image_path: &Path,
+        target_size: (u32, u32),
+    ) -> color_eyre::Result<String> {
+        let cache_key = Self::cache_key(image_path, target_size);
+
+        // Load texture if not cached
+        self.load_image_texture(image_path, target_size)?;
+
+        // Create bind group if not cached
+        self.get_or_create_bind_group(&cache_key)?;
+
+        Ok(cache_key)
+    }
+
+    /// Render an image to a specific output
+    pub fn render_to_output(
+        &mut self,
+        output_name: &str,
+        image_path: &Path,
+    ) -> color_eyre::Result<()> {
+        // Get target size first
+        let target_size = {
+            let surface_config = self.surface_configs.get(output_name).ok_or_else(|| {
+                color_eyre::eyre::eyre!("Surface config not found for output: {}", output_name)
+            })?;
+            (surface_config.width, surface_config.height)
+        };
+
+        // Prepare image and get cache key
+        let cache_key = self.prepare_image(image_path, target_size)?;
+
+        // Get references for rendering
+        let device = self
+            .device
+            .as_ref()
+            .ok_or_else(|| color_eyre::eyre::eyre!("Device not initialized"))?;
+        let queue = self
+            .queue
+            .as_ref()
+            .ok_or_else(|| color_eyre::eyre::eyre!("Queue not initialized"))?;
+        let render_pipeline = self
+            .image_pipeline
+            .as_ref()
+            .ok_or_else(|| color_eyre::eyre::eyre!("Image pipeline not initialized"))?;
+        let vertex_buffer = self
+            .vertex_buffer
+            .as_ref()
+            .ok_or_else(|| color_eyre::eyre::eyre!("Vertex buffer not initialized"))?;
+        let index_buffer = self
+            .index_buffer
+            .as_ref()
+            .ok_or_else(|| color_eyre::eyre::eyre!("Index buffer not initialized"))?;
+        let surface = self.map.get(output_name).ok_or_else(|| {
+            color_eyre::eyre::eyre!("Surface not found for output: {}", output_name)
+        })?;
+        let bind_group = self
+            .bind_group_cache
+            .get(&cache_key)
+            .ok_or_else(|| color_eyre::eyre::eyre!("Bind group not found in cache"))?;
+
+        // Get surface texture and render
+        let surface_texture = surface.get_current_texture()?;
+        let surface_view = surface_texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Image Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &surface_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            render_pass.set_pipeline(render_pipeline);
+            render_pass.set_bind_group(0, bind_group, &[]);
+            render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+            render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            render_pass.draw_indexed(0..6, 0, 0..1);
+        }
+
+        queue.submit(Some(encoder.finish()));
+        surface_texture.present();
+
+        Ok(())
+    }
+
+    /// Handle frame rendering for a specific output - called from frame callback
+    pub fn handle_frame(&mut self, output_name: &str, image_path: &Path) -> color_eyre::Result<()> {
+        self.render_to_output(output_name, image_path)
     }
 }
