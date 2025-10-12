@@ -3,9 +3,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use color_eyre::config;
 use rand::seq::SliceRandom;
-use smithay_client_toolkit::reexports::{calloop::ping, client};
+use smithay_client_toolkit::reexports::client;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_compositor, delegate_layer, delegate_output, delegate_registry, delegate_shm,
@@ -134,13 +133,13 @@ impl Wayper {
                 output.id(),
                 OutputRepr {
                     output_name: name.clone(),
-                    wl_repr: output,
+                    _wl_repr: output,
                     output_info,
                     output_config,
                     dimensions: None,
-                    scale_factor: 1,
+                    _scale_factor: 1,
                     pool,
-                    surface: Some(surface),
+                    _surface: Some(surface),
                     layer,
                     buffer: None,
                     first_configure: true,
@@ -434,7 +433,7 @@ impl LayerShellHandler for Wayper {
                     // Configure the wgpu surface for this output
                     let surface_format = match self
                         .wgpu
-                        .configure_surface(&output_name, (new_width, new_height))
+                        .configure_surface(output_name, (new_width, new_height))
                     {
                         Ok(format) => format,
                         Err(e) => {
@@ -451,10 +450,10 @@ impl LayerShellHandler for Wayper {
 
                     // first render
                     let first_image = output_guard.current_img();
-                    if let Some(image_path) = first_image {
-                        if let Err(e) = self.wgpu.render_to_output(&output_name, &image_path) {
-                            error!("Failed to render initial image: {}", e);
-                        }
+                    if let Some(image_path) = first_image
+                        && let Err(e) = self.wgpu.render_to_output(output_name, &image_path)
+                    {
+                        error!("Failed to render initial image: {}", e);
                     }
 
                     layer.wl_surface().frame(_qh, layer.wl_surface().clone());
@@ -471,7 +470,7 @@ impl LayerShellHandler for Wayper {
 
                     let draw_token = self
                         .c_queue_handle
-                        .insert_source(draw_source, move |previous_deadline, _, data| {
+                        .insert_source(draw_source, move |previous_deadline, _, _data| {
                             let instant = Instant::now();
                             let previous_deadline = previous_deadline.get_last_deadline();
                             let new_instant = previous_deadline + dur;

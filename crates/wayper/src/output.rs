@@ -26,18 +26,18 @@ use crate::render_server::{RenderJobRequest, RenderServer};
 #[derive(Debug)]
 pub struct OutputRepr {
     pub output_name: String,
-    pub wl_repr: WlOutput,
+    pub _wl_repr: WlOutput,
     pub output_info: OutputInfo,
     pub output_config: Option<OutputConfig>,
     pub dimensions: Option<(u32, u32)>,
-    pub scale_factor: i64,
+    pub _scale_factor: i64,
     pub first_configure: bool,
     /// Use to fire an instant draw command
     pub ping_draw: Option<calloop::ping::Ping>,
 
     pub pool: SlotPool,
     pub buffer: Option<Buffer>,
-    pub surface: Option<WlSurface>,
+    pub _surface: Option<WlSurface>,
     pub layer: LayerSurface,
 
     pub index: usize,
@@ -50,6 +50,7 @@ pub struct OutputRepr {
 
 impl OutputRepr {
     #[tracing::instrument(skip_all, fields(name=self.output_name))]
+    #[expect(unused)]
     pub fn update_config(&mut self, new_config: OutputConfig) {
         // TODO: implement daemon config update
         tracing::trace!("new config: {new_config:?}");

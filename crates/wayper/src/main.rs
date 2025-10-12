@@ -133,7 +133,8 @@ fn main() -> Result<()> {
             .dispatch(None, &mut data)
             .expect("event loop doesn't panic");
     }
-    drop(data.wgpu);
+    // TODO: signals handler
+    // drop(data.wgpu);
 }
 
 #[tracing::instrument(skip_all, fields(counter = _counter))]
