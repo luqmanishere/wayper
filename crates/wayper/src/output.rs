@@ -1,25 +1,18 @@
 //! Output. Data and processing happens here
 
-use std::{
-    io::{BufWriter, Write},
-    path::PathBuf,
-    sync::Arc,
-};
+use std::path::PathBuf;
 
-use color_eyre::eyre::Context;
 use smithay_client_toolkit::{
     output::OutputInfo,
     reexports::{
         calloop,
-        client::protocol::{wl_output::WlOutput, wl_shm, wl_surface::WlSurface},
+        client::protocol::{wl_output::WlOutput, wl_surface::WlSurface},
     },
-    shell::{WaylandSurface, wlr_layer::LayerSurface},
-    shm::slot::{Buffer, SlotPool},
+    shell::wlr_layer::LayerSurface,
+    shm::slot::Buffer,
 };
 
 use wayper_lib::config::OutputConfig;
-
-use crate::render_server::{RenderJobRequest, RenderServer};
 
 // TODO: maybe all pub is not a good idea
 
@@ -35,17 +28,15 @@ pub struct OutputRepr {
     /// Use to fire an instant draw command
     pub ping_draw: Option<calloop::ping::Ping>,
 
-    pub pool: SlotPool,
     pub buffer: Option<Buffer>,
     pub _surface: Option<WlSurface>,
-    pub layer: LayerSurface,
+    pub _layer: LayerSurface,
 
     pub index: usize,
     pub img_list: Vec<PathBuf>,
     pub visible: bool,
     pub should_next: bool,
     pub last_render_instant: std::time::Instant,
-    pub render_server: Arc<RenderServer>,
 }
 
 impl OutputRepr {
@@ -67,100 +58,6 @@ impl OutputRepr {
         // }
     }
 
-    /// Returns the rendered path
-    #[tracing::instrument(skip_all, fields(name=self.output_name))]
-    pub fn draw(&mut self) -> color_eyre::Result<PathBuf> {
-        let instant = std::time::Instant::now();
-        if !self.visible {
-            tracing::debug!("Not visible, not drawing");
-            return Ok(Default::default());
-        }
-
-        tracing::trace!("begin drawing");
-        let (width, height) = self.dimensions.expect("exists");
-        let stride = width as i32 * 4;
-
-        let path = self.next();
-        tracing::info!("drawing: {}", path.display());
-
-        let request = RenderJobRequest::Image {
-            width,
-            height,
-            image: path.clone(),
-        };
-
-        // only the first render will be synchronous with the request. subsequent renders are queued
-        let image = self.render_server.get_job(request);
-
-        // check if buffer exists
-        let (buffer, canvas) = if let Some(buffer) = self.buffer.take() {
-            match self.pool.canvas(&buffer) {
-                Some(canvas) => (buffer, canvas),
-                None => {
-                    tracing::warn!("Missing canvas when buffer exists!");
-                    let (buffer, canvas) = self
-                        .pool
-                        .create_buffer(
-                            width as i32,
-                            height as i32,
-                            stride,
-                            wl_shm::Format::Abgr8888,
-                        )
-                        .expect("create buffer");
-                    (buffer, canvas)
-                }
-            }
-        } else {
-            let (buffer, canvas) = self
-                .pool
-                .create_buffer(
-                    width as i32,
-                    height as i32,
-                    stride,
-                    wl_shm::Format::Abgr8888,
-                )
-                .expect("create buffer");
-            (buffer, canvas)
-        };
-
-        // Draw to the window:
-        {
-            let mut writer = BufWriter::new(canvas);
-            writer.write_all(image.as_raw()).unwrap();
-            writer.flush().unwrap();
-        }
-
-        // Damage the entire window
-        self.layer
-            .wl_surface()
-            .damage_buffer(0, 0, width as i32, height as i32);
-
-        // Attach and commit to present.
-        buffer
-            .attach_to(self.layer.wl_surface())
-            .expect("buffer attach");
-        self.layer.wl_surface().commit();
-
-        // reuse the buffer created, since
-        self.buffer = Some(buffer);
-
-        if self.first_configure {
-            self.first_configure = false;
-        }
-        tracing::trace!("finish drawing");
-
-        self.render_server
-            .submit_job(RenderJobRequest::Image {
-                width,
-                height,
-                image: self.peek_next_img(),
-            })
-            .wrap_err("Error sending job to render server")?;
-
-        tracing::info!("draw elapsed time: {}ms", instant.elapsed().as_millis());
-        Ok(path)
-    }
-
     /// Increment the index and give the image. If its the first configure, it uses
     /// an index of 0
     pub fn next(&mut self) -> PathBuf {
@@ -173,6 +70,7 @@ impl OutputRepr {
     }
 
     /// get the next image, without incrementing the index
+    #[expect(unused)]
     pub fn peek_next_img(&self) -> PathBuf {
         self.img_list[self.get_next_index()].clone()
     }

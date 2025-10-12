@@ -20,7 +20,7 @@ use smithay_client_toolkit::{
         WaylandSurface,
         wlr_layer::{Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler},
     },
-    shm::{Shm, ShmHandler, slot::SlotPool},
+    shm::{Shm, ShmHandler},
 };
 use tracing::{debug, error, info, instrument, trace, warn};
 use walkdir::WalkDir;
@@ -30,9 +30,6 @@ use wayper_lib::{config::Config, event_source::DrawSource};
 use crate::{
     map::{OutputKey, OutputMap},
     output::OutputRepr,
-};
-use crate::{
-    render_server::{RenderJobRequest, RenderServer},
     wgpu_renderer::WgpuRenderer,
 };
 
@@ -53,7 +50,6 @@ pub struct Wayper {
     pub outputs: OutputMap,
     pub config: Config,
     pub socket_counter: u64,
-    pub render_server: std::sync::Arc<RenderServer>,
 
     pub wgpu: WgpuRenderer,
 }
@@ -61,15 +57,6 @@ pub struct Wayper {
 // TODO: modularize with calloop?
 
 impl Wayper {
-    #[expect(dead_code)]
-    pub fn draw(&mut self) {
-        for rm in self.outputs.iter() {
-            let mut v = rm.lock().unwrap();
-
-            v.draw().expect("success drawing");
-        }
-    }
-
     pub fn add_output(
         &mut self,
         _conn: &client::Connection,
@@ -105,7 +92,6 @@ impl Wayper {
             // commit the layer
             layer.commit();
 
-            let pool = SlotPool::new(256 * 256 * 4, &self.shm).expect("Failed to create pool");
             self.wgpu
                 .new_surface(
                     name.clone(),
@@ -139,9 +125,8 @@ impl Wayper {
                     output_config,
                     dimensions: None,
                     _scale_factor: 1,
-                    pool,
                     _surface: Some(surface),
-                    layer,
+                    _layer: layer,
                     buffer: None,
                     first_configure: true,
                     ping_draw: None,
@@ -150,7 +135,6 @@ impl Wayper {
                     visible: true,
                     should_next: false,
                     last_render_instant: Instant::now(),
-                    render_server: std::sync::Arc::clone(&self.render_server),
                 },
             );
         } else {
@@ -200,16 +184,7 @@ impl Wayper {
             if let Some(ping_draw) = output.ping_draw.as_ref() {
                 ping_draw.ping();
             } else {
-                // incase ping_draw doesnt exist, which should not happen after the first configure
-                let (width, height) = output.dimensions.unwrap_or_default();
-                // set first configure to get the first image
-                output.first_configure = true;
-                let image = output.peek_next_img();
-                output.render_server.submit_job(RenderJobRequest::Image {
-                    width,
-                    height,
-                    image,
-                })?;
+                error!("ping draw does not exist, did output configure fail?");
             }
         }
 

@@ -27,13 +27,12 @@ use wayper_lib::{
 use crate::{
     map::{OutputKey, OutputMap},
     output::OutputRepr,
-    render_server::RenderServer,
     wgpu_renderer::WgpuRenderer,
 };
 
 mod map;
 mod output;
-mod render_server;
+// mod render_server;
 mod wallpaperhandler;
 mod wgpu_renderer;
 
@@ -124,7 +123,6 @@ fn main() -> Result<()> {
         c_queue_handle: event_loop.handle(),
         draw_tokens: HashMap::new(),
         socket_counter: 0,
-        render_server: std::sync::Arc::new(RenderServer::new()),
         wgpu: WgpuRenderer::new(),
     };
 
