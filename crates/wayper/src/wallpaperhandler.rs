@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    io::Read,
     time::{Duration, Instant},
 };
 
@@ -292,6 +293,13 @@ impl CompositorHandler for Wayper {
                 }
                 output_handle.should_next = !output_handle.should_next;
                 output_handle.last_render_instant = Instant::now();
+
+                if let Some(config) = &output_handle.output_config
+                    && let Some(command) = config.run_command.clone()
+                {
+                    let img_path = image.clone();
+                    std::thread::spawn(|| run_command(command, img_path));
+                }
             }
         } else {
             error!("no output configured for surface {surface_id}");
@@ -558,62 +566,6 @@ impl LayerShellHandler for Wayper {
                                     if let Some(config) = &lock.output_config
                                         && let Some(command) = &config.run_command
                                     {
-                                        let mut command =
-                                            shlex::Shlex::new(command).collect::<Vec<_>>();
-
-                                        // drop immediately
-                                        drop(lock);
-
-                                        // rudimentary substitution that I can't figure out how to do in place
-                                        for arg in command.iter_mut() {
-                                            if arg == "{image}" {
-                                                arg.clear();
-                                                arg.push_str(&path.display().to_string());
-                                            }
-                                        }
-
-                                        tracing::info!("running command {}", command.join(" "));
-
-                                        // let chains wooooo
-                                        if let Some((command, args)) = command.split_first()
-                                            && let Ok((mut pipe_reader, pipe_writer)) =
-                                                std::io::pipe()
-                                            && let Ok(mut  child) =
-                                                std::process::Command::new(command)
-                                                    .args(args)
-                                                    .stderr(
-                                                        pipe_writer
-                                                            .try_clone()
-                                                            .expect("pipe writer cannot be cloned"),
-                                                    )
-                                                    .stdout(pipe_writer)
-                                                    .spawn()
-                                        {
-                                            std::thread::spawn(move || {
-                                                let mut buf = String::new();
-                                                pipe_reader
-                                                    .read_to_string(&mut buf)
-                                                    .expect("readable pipe");
-                                                let buf = buf.trim();
-
-                                                if !buf.is_empty() {
-                                                    tracing::warn!("color_command output:\n{buf}");
-                                                }
-
-                                                if let Ok(exit_status) = child.wait()
-                                                    && !exit_status.success()
-                                                {
-                                                    tracing::error!(
-                                                        "command exited with code {:?}",
-                                                        exit_status.code()
-                                                    );
-                                                } else {
-                                                    tracing::info!("command executed successfully");
-                                                }
-                                            });
-                                        } else {
-                                            tracing::error!("command run error, check if the command exists and is correct");
-                                        }
                                     }
                                 }
                                 Err(e) => {
@@ -663,3 +615,49 @@ delegate_output!(Wayper);
 delegate_layer!(Wayper);
 delegate_registry!(Wayper);
 delegate_shm!(Wayper);
+
+fn run_command(command: String, img_path: std::path::PathBuf) {
+    let mut command = shlex::Shlex::new(&command).collect::<Vec<_>>();
+
+    // rudimentary substitution that I can't figure out how to do in place
+    for arg in command.iter_mut() {
+        if arg == "{image}" {
+            arg.clear();
+            arg.push_str(&img_path.display().to_string());
+        }
+    }
+
+    tracing::info!("running command {}", command.join(" "));
+
+    // let chains wooooo
+    if let Some((command, args)) = command.split_first()
+        && let Ok((mut pipe_reader, pipe_writer)) = std::io::pipe()
+        && let Ok(mut child) = std::process::Command::new(command)
+            .args(args)
+            .stderr(
+                pipe_writer
+                    .try_clone()
+                    .expect("pipe writer cannot be cloned"),
+            )
+            .stdout(pipe_writer)
+            .spawn()
+    {
+        let mut buf = String::new();
+        pipe_reader.read_to_string(&mut buf).expect("readable pipe");
+        let buf = buf.trim();
+
+        if !buf.is_empty() {
+            tracing::warn!("color_command output:\n{buf}");
+        }
+
+        if let Ok(exit_status) = child.wait()
+            && !exit_status.success()
+        {
+            tracing::error!("command exited with code {:?}", exit_status.code());
+        } else {
+            tracing::info!("command executed successfully");
+        }
+    } else {
+        tracing::error!("command run error, check if the command exists and is correct");
+    }
+}
