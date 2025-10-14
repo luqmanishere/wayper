@@ -115,6 +115,8 @@
     vulkan-tools vulkan-tools-lunarg
     vulkan-extension-layer
     vulkan-validation-layers
+
+    wgsl-analyzer
           ];
          in 
            pkgs.mkShell {

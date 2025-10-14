@@ -18,6 +18,7 @@ pub struct WgpuRenderer {
     pub vertex_buffer: Option<wgpu::Buffer>,
     pub index_buffer: Option<wgpu::Buffer>,
     pub sampler: Option<wgpu::Sampler>,
+    pub transition_params_buf: Option<wgpu::Buffer>,
     /// Texture management - cache textures by image path + size
     pub texture_cache: FastHashMap<String, wgpu::Texture>,
     pub bind_group_cache: FastHashMap<String, wgpu::BindGroup>,
@@ -43,6 +44,7 @@ impl WgpuRenderer {
             vertex_buffer: None,
             index_buffer: None,
             sampler: None,
+            transition_params_buf: None,
             texture_cache: Default::default(),
             bind_group_cache: Default::default(),
             surface_configs: Default::default(),
@@ -102,7 +104,7 @@ impl WgpuRenderer {
         // Load shader
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Image Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../../shader.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/shader.wgsl").into()),
         });
 
         // Create bind group layout for texture and sampler
@@ -122,6 +124,26 @@ impl WgpuRenderer {
                         multisampled: false,
                         view_dimension: wgpu::TextureViewDimension::D2,
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
                     count: None,
                 },
@@ -200,6 +222,12 @@ impl WgpuRenderer {
 
         let indices = [0u16, 1, 2, 0, 2, 3];
 
+        let transition_params = TransitionParams {
+            progress: 0.0,
+            anim_type: 0,
+            direction: [0.0, 0.0],
+        };
+
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
             contents: bytemuck::cast_slice(vertices),
@@ -210,6 +238,12 @@ impl WgpuRenderer {
             label: Some("Index Buffer"),
             contents: bytemuck::cast_slice(&indices),
             usage: wgpu::BufferUsages::INDEX,
+        });
+
+        let transition_params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("transition params buf"),
+            contents: bytemuck::bytes_of(&transition_params),
+            usage: wgpu::BufferUsages::UNIFORM,
         });
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -226,6 +260,7 @@ impl WgpuRenderer {
         self.bind_group_layout = Some(bind_group_layout);
         self.vertex_buffer = Some(vertex_buffer);
         self.index_buffer = Some(index_buffer);
+        self.transition_params_buf = Some(transition_params_buf);
         self.sampler = Some(sampler);
 
         println!("Image pipeline initialized successfully");
@@ -335,6 +370,11 @@ impl WgpuRenderer {
             .texture_cache
             .get(cache_key)
             .ok_or_else(|| color_eyre::eyre::eyre!("Texture not found in cache"))?;
+        let transition_params = self
+            .transition_params_buf
+            .as_ref()
+            .expect("buffer initialized")
+            .as_entire_buffer_binding();
 
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -345,9 +385,19 @@ impl WgpuRenderer {
                     binding: 0,
                     resource: wgpu::BindingResource::Sampler(sampler),
                 },
+                // tex1
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(&texture_view),
+                },
+                // tex2
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Buffer(transition_params),
                 },
             ],
             label: Some("Image Bind Group"),
@@ -501,4 +551,12 @@ impl WgpuRenderer {
     pub fn handle_frame(&mut self, output_name: &str, image_path: &Path) -> color_eyre::Result<()> {
         self.render_to_output(output_name, image_path)
     }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct TransitionParams {
+    progress: f32,
+    anim_type: u32,
+    direction: [f32; 2],
 }
