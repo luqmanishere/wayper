@@ -35,5 +35,5 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     let color1 = textureSample(tex1, samp, in.uv);
     let color2 = textureSample(tex2, samp, in.uv);
-    return textureSample(tex1, samp, in.uv);
+    return textureSample(tex2, samp, in.uv);
 }

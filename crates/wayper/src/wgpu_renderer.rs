@@ -1,4 +1,5 @@
 //! The wgpu renderer
+//! TODO: heavily comment this arcane piece of shit
 use std::{path::Path, ptr::NonNull};
 
 use image::GenericImageView;
@@ -23,6 +24,8 @@ pub struct WgpuRenderer {
     pub texture_cache: FastHashMap<String, wgpu::Texture>,
     pub bind_group_cache: FastHashMap<String, wgpu::BindGroup>,
     pub surface_configs: FastHashMap<String, wgpu::SurfaceConfiguration>,
+    /// Track current image cache key per output for transitions (output_name -> cache_key)
+    pub current_image_keys: FastHashMap<String, String>,
     // TODO: proper keys
 }
 
@@ -48,6 +51,7 @@ impl WgpuRenderer {
             texture_cache: Default::default(),
             bind_group_cache: Default::default(),
             surface_configs: Default::default(),
+            current_image_keys: Default::default(),
         }
     }
 
@@ -243,7 +247,7 @@ impl WgpuRenderer {
         let transition_params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("transition params buf"),
             contents: bytemuck::bytes_of(&transition_params),
-            usage: wgpu::BufferUsages::UNIFORM,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -275,6 +279,74 @@ impl WgpuRenderer {
             target_size.0,
             target_size.1
         )
+    }
+
+    /// Generate cache key for dummy black texture
+    fn dummy_texture_key(target_size: (u32, u32)) -> String {
+        format!("__dummy_black__@{}x{}", target_size.0, target_size.1)
+    }
+
+    /// Get or create a black dummy texture of the specified size
+    pub fn get_or_create_dummy_texture(
+        &mut self,
+        target_size: (u32, u32),
+    ) -> color_eyre::Result<String> {
+        let cache_key = Self::dummy_texture_key(target_size);
+
+        // Check if dummy texture is already cached
+        if self.texture_cache.contains_key(&cache_key) {
+            return Ok(cache_key);
+        }
+
+        let device = self
+            .device
+            .as_ref()
+            .ok_or_else(|| color_eyre::eyre::eyre!("Device not initialized"))?;
+        let queue = self
+            .queue
+            .as_ref()
+            .ok_or_else(|| color_eyre::eyre::eyre!("Queue not initialized"))?;
+
+        // Create black image data
+        let black_data = vec![0u8; (target_size.0 * target_size.1 * 4) as usize];
+
+        let texture_size = wgpu::Extent3d {
+            width: target_size.0,
+            height: target_size.1,
+            depth_or_array_layers: 1,
+        };
+
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Dummy Black Texture"),
+            size: texture_size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        // Write black data to the texture
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &black_data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * target_size.0),
+                rows_per_image: Some(target_size.1),
+            },
+            texture_size,
+        );
+
+        // Cache the texture
+        self.texture_cache.insert(cache_key.clone(), texture);
+        Ok(cache_key)
     }
 
     /// Load an image and create a wgpu texture from it
@@ -347,11 +419,18 @@ impl WgpuRenderer {
         Ok(self.texture_cache.get(&cache_key).unwrap())
     }
 
-    /// Get or create a bind group for a texture
-    pub fn get_or_create_bind_group(&mut self, cache_key: &str) -> color_eyre::Result<()> {
+    /// Get or create a bind group for two textures
+    pub fn get_or_create_bind_group(
+        &mut self,
+        cache_key1: &str,
+        cache_key2: &str,
+    ) -> color_eyre::Result<String> {
+        // Generate bind group cache key from both texture keys
+        let bind_group_key = format!("{}+{}", cache_key1, cache_key2);
+
         // Check if bind group is already cached
-        if self.bind_group_cache.contains_key(cache_key) {
-            return Ok(());
+        if self.bind_group_cache.contains_key(&bind_group_key) {
+            return Ok(bind_group_key);
         }
 
         let device = self
@@ -366,17 +445,20 @@ impl WgpuRenderer {
             .sampler
             .as_ref()
             .ok_or_else(|| color_eyre::eyre::eyre!("Sampler not initialized"))?;
-        let texture = self
-            .texture_cache
-            .get(cache_key)
-            .ok_or_else(|| color_eyre::eyre::eyre!("Texture not found in cache"))?;
+        let texture1 = self.texture_cache.get(cache_key1).ok_or_else(|| {
+            color_eyre::eyre::eyre!("Texture 1 not found in cache: {}", cache_key1)
+        })?;
+        let texture2 = self.texture_cache.get(cache_key2).ok_or_else(|| {
+            color_eyre::eyre::eyre!("Texture 2 not found in cache: {}", cache_key2)
+        })?;
         let transition_params = self
             .transition_params_buf
             .as_ref()
             .expect("buffer initialized")
             .as_entire_buffer_binding();
 
-        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let texture_view1 = texture1.create_view(&wgpu::TextureViewDescriptor::default());
+        let texture_view2 = texture2.create_view(&wgpu::TextureViewDescriptor::default());
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: bind_group_layout,
@@ -385,15 +467,15 @@ impl WgpuRenderer {
                     binding: 0,
                     resource: wgpu::BindingResource::Sampler(sampler),
                 },
-                // tex1
+                // tex1 - previous texture
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&texture_view),
+                    resource: wgpu::BindingResource::TextureView(&texture_view1),
                 },
-                // tex2
+                // tex2 - current texture
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&texture_view),
+                    resource: wgpu::BindingResource::TextureView(&texture_view2),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
@@ -405,7 +487,37 @@ impl WgpuRenderer {
 
         // Cache the bind group
         self.bind_group_cache
-            .insert(cache_key.to_string(), bind_group);
+            .insert(bind_group_key.clone(), bind_group);
+        Ok(bind_group_key)
+    }
+
+    /// Update transition parameters for animations
+    pub fn update_transition_params(
+        &mut self,
+        progress: f32,
+        anim_type: u32,
+        direction: [f32; 2],
+    ) -> color_eyre::Result<()> {
+        let queue = self
+            .queue
+            .as_ref()
+            .ok_or_else(|| color_eyre::eyre::eyre!("Queue not initialized"))?;
+        let transition_params_buf = self
+            .transition_params_buf
+            .as_ref()
+            .ok_or_else(|| color_eyre::eyre::eyre!("Transition params buffer not initialized"))?;
+
+        let transition_params = TransitionParams {
+            progress,
+            anim_type,
+            direction,
+        };
+
+        queue.write_buffer(
+            transition_params_buf,
+            0,
+            bytemuck::bytes_of(&transition_params),
+        );
         Ok(())
     }
 
@@ -447,24 +559,7 @@ impl WgpuRenderer {
         Ok(surface_format)
     }
 
-    /// Prepare texture and bind group for an image
-    pub fn prepare_image(
-        &mut self,
-        image_path: &Path,
-        target_size: (u32, u32),
-    ) -> color_eyre::Result<String> {
-        let cache_key = Self::cache_key(image_path, target_size);
-
-        // Load texture if not cached
-        self.load_image_texture(image_path, target_size)?;
-
-        // Create bind group if not cached
-        self.get_or_create_bind_group(&cache_key)?;
-
-        Ok(cache_key)
-    }
-
-    /// Render an image to a specific output
+    /// Render an image to a specific output with transition support
     pub fn render_to_output(
         &mut self,
         output_name: &str,
@@ -478,8 +573,31 @@ impl WgpuRenderer {
             (surface_config.width, surface_config.height)
         };
 
-        // Prepare image and get cache key
-        let cache_key = self.prepare_image(image_path, target_size)?;
+        // Load the new image texture
+        let current_cache_key = Self::cache_key(image_path, target_size);
+        self.load_image_texture(image_path, target_size)?;
+
+        // Get or create previous texture (either actual previous or dummy black)
+        let previous_cache_key = self
+            .current_image_keys
+            .get(output_name)
+            .cloned()
+            .unwrap_or_else(|| {
+                // First image on this output - create dummy texture
+                self.get_or_create_dummy_texture(target_size)
+                    .expect("Failed to create dummy texture")
+            });
+
+        // Create bind group with (previous, current) textures
+        let bind_group_key =
+            self.get_or_create_bind_group(&previous_cache_key, &current_cache_key)?;
+
+        // Reset progress to 1.0 to show the current image (tex2) fully
+        self.update_transition_params(1.0, 0, [0.0, 0.0])?;
+
+        // Update tracking for next transition
+        self.current_image_keys
+            .insert(output_name.to_string(), current_cache_key);
 
         // Get references for rendering
         let device = self
@@ -507,7 +625,7 @@ impl WgpuRenderer {
         })?;
         let bind_group = self
             .bind_group_cache
-            .get(&cache_key)
+            .get(&bind_group_key)
             .ok_or_else(|| color_eyre::eyre::eyre!("Bind group not found in cache"))?;
 
         // Get surface texture and render
