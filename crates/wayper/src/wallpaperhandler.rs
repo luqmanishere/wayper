@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    io::Read,
     time::{Duration, Instant},
 };
 
@@ -606,32 +605,22 @@ fn run_command(command: String, img_path: std::path::PathBuf) {
 
     // let chains wooooo
     if let Some((command, args)) = command.split_first()
-        && let Ok((mut pipe_reader, pipe_writer)) = std::io::pipe()
-        && let Ok(mut child) = std::process::Command::new(command)
-            .args(args)
-            .stderr(
-                pipe_writer
-                    .try_clone()
-                    .expect("pipe writer cannot be cloned"),
-            )
-            .stdout(pipe_writer)
-            .spawn()
+        && let Ok(child) = std::process::Command::new(command).args(args).output()
     {
-        let mut buf = String::new();
-        pipe_reader.read_to_string(&mut buf).expect("readable pipe");
-        let buf = buf.trim();
-
-        if !buf.is_empty() {
-            tracing::warn!("color_command output:\n{buf}");
+        if !child.stdout.is_empty() {
+            tracing::info!(
+                "command stdout: {}",
+                String::from_utf8(child.stdout).unwrap_or_default()
+            );
         }
 
-        if let Ok(exit_status) = child.wait()
-            && !exit_status.success()
-        {
-            tracing::error!("command exited with code {:?}", exit_status.code());
-        } else {
-            tracing::info!("command executed successfully");
+        if !child.stderr.is_empty() {
+            tracing::info!(
+                "command stderr: {}",
+                String::from_utf8(child.stderr).unwrap_or_default()
+            );
         }
+        tracing::info!("command exited with code {:?}", child.status.code());
     } else {
         tracing::error!("command run error, check if the command exists and is correct");
     }
