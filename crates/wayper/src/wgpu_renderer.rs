@@ -1,7 +1,12 @@
 //! The wgpu renderer
 //! TODO: heavily comment this arcane piece of shit
-use std::{path::Path, ptr::NonNull};
+use std::{
+    path::{Path, PathBuf},
+    ptr::NonNull,
+    sync::mpsc::{Receiver, Sender},
+};
 
+use color_eyre::eyre::eyre;
 use image::GenericImageView;
 use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
@@ -26,6 +31,9 @@ pub struct WgpuRenderer {
     pub surface_configs: FastHashMap<String, wgpu::SurfaceConfiguration>,
     /// Track current image cache key per output for transitions (output_name -> cache_key)
     pub current_image_keys: FastHashMap<String, String>,
+
+    texture_loader_tx: Sender<TextureLoadRequest>,
+    texture_loader_rx: Receiver<TextureLoadResult>,
     // TODO: proper keys
 }
 
@@ -36,6 +44,14 @@ impl WgpuRenderer {
             backends: wgpu::Backends::all(),
             ..Default::default()
         });
+
+        let (load_tx, load_rx) = std::sync::mpsc::channel();
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+
+        std::thread::spawn(move || {
+            texture_loader_worker(load_rx, result_tx);
+        });
+
         Self {
             instance,
             adapter: None,
@@ -52,9 +68,134 @@ impl WgpuRenderer {
             bind_group_cache: Default::default(),
             surface_configs: Default::default(),
             current_image_keys: Default::default(),
+            texture_loader_tx: load_tx,
+            texture_loader_rx: result_rx,
         }
     }
+}
 
+impl WgpuRenderer {
+    pub fn request_texture_load(
+        &mut self,
+        image_path: &Path,
+        target_size: (u32, u32),
+        output_name: String,
+    ) -> color_eyre::Result<()> {
+        let cache_key = Self::cache_key(image_path, target_size);
+
+        if self.texture_cache.contains_key(&cache_key) {
+            return Ok(());
+        }
+
+        self.texture_loader_tx.send(TextureLoadRequest {
+            image_path: image_path.to_path_buf(),
+            target_size,
+            output_name,
+        })?;
+
+        Ok(())
+    }
+
+    pub fn process_loaded_textures(&mut self) -> color_eyre::Result<usize> {
+        let device = self
+            .device
+            .as_ref()
+            .ok_or_else(|| eyre!("Device not initialized"))?;
+        let queue = self
+            .queue
+            .as_ref()
+            .ok_or_else(|| eyre!("Queue not initialized"))?;
+
+        let mut count = 0;
+
+        while let Ok(result) = self.texture_loader_rx.try_recv() {
+            if self.texture_cache.contains_key(&result.cache_key) {
+                continue;
+            }
+
+            let texture_size = wgpu::Extent3d {
+                width: result.dimensions.0,
+                height: result.dimensions.1,
+                depth_or_array_layers: 1,
+            };
+
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("image texture"),
+                size: texture_size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &result.image_data,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4 * result.dimensions.0),
+                    rows_per_image: Some(result.dimensions.1),
+                },
+                texture_size,
+            );
+
+            self.texture_cache.insert(result.cache_key.clone(), texture);
+            count += 1;
+        }
+
+        Ok(count)
+    }
+}
+
+fn texture_loader_worker(
+    load_rx: Receiver<TextureLoadRequest>,
+    result_tx: Sender<TextureLoadResult>,
+) {
+    while let Ok(request) = load_rx.recv() {
+        match load_resize_image(&request.image_path, request.target_size) {
+            Ok((image_data, dimensions)) => {
+                let cache_key = format!(
+                    "{}@{}x{}",
+                    request.image_path.display(),
+                    request.target_size.0,
+                    request.target_size.1
+                );
+
+                let _ = result_tx.send(TextureLoadResult {
+                    cache_key,
+                    image_data,
+                    dimensions,
+                });
+            }
+            Err(e) => {
+                tracing::error!("Failed to load image {:?}: {}", request.image_path, e)
+            }
+        }
+    }
+}
+
+fn load_resize_image(
+    image_path: &Path,
+    target_size: (u32, u32),
+) -> color_eyre::Result<(image::RgbaImage, (u32, u32))> {
+    let img = image::open(image_path)?.resize_to_fill(
+        target_size.0,
+        target_size.1,
+        image::imageops::FilterType::Lanczos3,
+    );
+    let rgba = img.to_rgba8();
+    let dimensions = rgba.dimensions();
+    Ok((rgba, dimensions))
+}
+
+impl WgpuRenderer {
     pub fn new_surface(
         &mut self,
         output_name: String,
@@ -677,4 +818,16 @@ struct TransitionParams {
     progress: f32,
     anim_type: u32,
     direction: [f32; 2],
+}
+
+struct TextureLoadRequest {
+    image_path: PathBuf,
+    target_size: (u32, u32),
+    output_name: String,
+}
+
+struct TextureLoadResult {
+    cache_key: String,
+    image_data: image::RgbaImage,
+    dimensions: (u32, u32),
 }

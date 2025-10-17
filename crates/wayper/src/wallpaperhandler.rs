@@ -242,6 +242,13 @@ impl CompositorHandler for Wayper {
         time: u32,
     ) {
         trace!("frame called {:?} - {}", surface, time);
+
+        if let Ok(count) = self.wgpu.process_loaded_textures() {
+            if count > 0 {
+                debug!("Processed {} pre-loaded textures", count);
+            }
+        }
+
         let surface_id = surface.id();
 
         if let Some(output) = self.outputs.get(OutputKey::SurfaceId(surface_id.clone())) {
@@ -267,6 +274,17 @@ impl CompositorHandler for Wayper {
                 }
                 output_handle.should_next = !output_handle.should_next;
                 output_handle.last_render_instant = Instant::now();
+
+                let next_image = output_handle.peek_next_img();
+                if let Some(dims) = output_handle.dimensions {
+                    if let Err(e) = self.wgpu.request_texture_load(
+                        &next_image,
+                        dims,
+                        output_handle.output_name.clone(),
+                    ) {
+                        error!("Failed to request pre-load: {}", e);
+                    }
+                }
 
                 if let Some(config) = &output_handle.output_config
                     && let Some(command) = config.run_command.clone()
@@ -436,6 +454,15 @@ impl LayerShellHandler for Wayper {
                         && let Err(e) = self.wgpu.render_to_output(output_name, &image_path)
                     {
                         error!("Failed to render initial image: {}", e);
+                    }
+
+                    let next_image = output_guard.peek_next_img();
+                    if let Err(e) = self.wgpu.request_texture_load(
+                        &next_image,
+                        (new_width, new_height),
+                        output_name.to_string(),
+                    ) {
+                        error!("Failed to request pre-load of next image: {}", e);
                     }
 
                     layer.wl_surface().frame(_qh, layer.wl_surface().clone());
