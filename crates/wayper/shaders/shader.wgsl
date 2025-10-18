@@ -33,7 +33,20 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+    // previous image
     let color1 = textureSample(tex1, samp, in.uv);
+    // current image
     let color2 = textureSample(tex2, samp, in.uv);
-    return textureSample(tex2, samp, in.uv);
+
+    let progress = u_params.progress;
+
+    // crossfade transition (anim_type == 0)
+    if u_params.anim_type == 0u {
+        return mix(color1, color2, progress);
+    }
+
+    // TODO: seperate transitions into different files
+
+    // fallback: show current image if no animation or invalid
+    return color2;
 }

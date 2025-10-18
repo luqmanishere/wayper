@@ -33,6 +33,7 @@ impl CompositorHandler for Wayper {
         surface: &client::protocol::wl_surface::WlSurface,
         time: u32,
     ) {
+        // TODO: visibility via logs. considering slog
         trace!("frame called {:?} - {}", surface, time);
 
         if let Ok(count) = self.wgpu.process_loaded_textures()
@@ -46,10 +47,53 @@ impl CompositorHandler for Wayper {
         if let Some(output) = self.outputs.get(OutputKey::SurfaceId(surface_id.clone())) {
             let mut output_handle = output.lock().unwrap();
 
-            // all this is temp since we will start with animations soonish.
-            if output_handle.should_next {
+            if let Some(transition) = &mut output_handle.transition {
+                transition.start();
+
+                // rip any compositors that can't handle this
+                if !transition.should_render_frame() {
+                    surface.frame(_qh, surface.clone());
+                    surface.commit();
+                    return;
+                }
+
+                // i wonder if this is good practice or nah?
+                let progress = transition.eased_progress();
+                let transition_type = transition.transition_type.to_u32();
+                let is_complete = transition.is_complete();
+                let output_name = output_handle.output_name.clone();
+
+                let previous_img = output_handle.previous_img();
+                let Some(current_img) = output_handle.current_img() else {
+                    error!("no current image found for {}", output_name);
+                    return;
+                };
+
+                if let Err(e) = self.wgpu.render_frame(
+                    &output_name,
+                    previous_img.as_deref(),
+                    &current_img,
+                    progress,
+                    transition_type,
+                ) {
+                    error!("failed to render transition frame: {e}");
+                }
+
+                if is_complete {
+                    debug!("Transition complete for {}", output_name);
+                    output_handle.transition = None;
+                    output_handle.last_render_instant = Instant::now();
+
+                    if output_handle.first_configure {
+                        output_handle.first_configure = false;
+                    }
+                }
+
+                surface.frame(_qh, surface.clone());
+                surface.commit();
+            } else if output_handle.should_next {
                 let last_render = output_handle.last_render_instant.elapsed();
-                tracing::debug!("last render was {}s ago", last_render.as_secs_f64());
+                debug!("last render was {}s ago", last_render.as_secs_f64());
 
                 output_handle.next();
 
@@ -58,14 +102,49 @@ impl CompositorHandler for Wayper {
                     return;
                 };
 
-                if let Err(e) = self
-                    .wgpu
-                    .handle_frame(&output_handle.output_name, image.as_path())
-                {
-                    error!("failed to render frame: {e}");
+                let should_animate = if let Some(config) = &output_handle.output_config {
+                    config.is_transitions_enabled(&self.config)
+                } else {
+                    false
+                };
+
+                if should_animate {
+                    let config = output_handle.output_config.as_ref().unwrap();
+                    let duration_ms = config.get_transition_duration(&self.config);
+                    let target_fps = config.get_transition_fps(&self.config);
+                    let transition_type = config.get_transition_type();
+
+                    output_handle.transition = Some(crate::output::TransitionData::new(
+                        transition_type,
+                        duration_ms,
+                        target_fps,
+                    ));
+
+                    info!(
+                        "Starting {} transition for {} at {} FPS",
+                        match transition_type {
+                            wayper_lib::config::TransitionType::Crossfade => "crossfade",
+                        },
+                        output_handle.output_name,
+                        target_fps
+                    );
+
+                    surface.frame(_qh, surface.clone());
+                } else {
+                    let previous_img = output_handle.previous_img();
+                    if let Err(e) = self.wgpu.render_frame(
+                        &output_handle.output_name,
+                        previous_img.as_deref(),
+                        image.as_path(),
+                        1.0,
+                        0,
+                    ) {
+                        error!("failed to render frame: {e}");
+                    }
+                    output_handle.last_render_instant = Instant::now();
                 }
-                output_handle.should_next = !output_handle.should_next;
-                output_handle.last_render_instant = Instant::now();
+
+                output_handle.should_next = false;
 
                 let next_image = output_handle.peek_next_img();
                 if let Some(dims) = output_handle.dimensions
@@ -84,14 +163,15 @@ impl CompositorHandler for Wayper {
                     let img_path = image.clone();
                     std::thread::spawn(|| utils::run_command(command, img_path));
                 }
+
+                surface.commit();
+            } else {
+                surface.frame(_qh, surface.clone());
+                surface.commit();
             }
         } else {
             error!("no output configured for surface {surface_id}");
         }
-
-        // remember to request other frames
-        surface.frame(_qh, surface.clone());
-        surface.commit();
     }
 
     fn transform_changed(

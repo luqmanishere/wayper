@@ -29,8 +29,6 @@ pub struct WgpuRenderer {
     pub texture_cache: FastHashMap<String, wgpu::Texture>,
     pub bind_group_cache: FastHashMap<String, wgpu::BindGroup>,
     pub surface_configs: FastHashMap<String, wgpu::SurfaceConfiguration>,
-    /// Track current image cache key per output for transitions (output_name -> cache_key)
-    pub current_image_keys: FastHashMap<String, String>,
 
     texture_loader_tx: Sender<TextureLoadRequest>,
     texture_loader_rx: Receiver<TextureLoadResult>,
@@ -67,7 +65,6 @@ impl WgpuRenderer {
             texture_cache: Default::default(),
             bind_group_cache: Default::default(),
             surface_configs: Default::default(),
-            current_image_keys: Default::default(),
             texture_loader_tx: load_tx,
             texture_loader_rx: result_rx,
         }
@@ -707,13 +704,24 @@ impl WgpuRenderer {
         Ok(surface_format)
     }
 
-    /// Render an image to a specific output with transition support
-    pub fn render_to_output(
+    /// Unified rendering method that handles both transitions and instant switches.
+    /// Refer to the arguments.
+    ///
+    /// # Arguments
+    /// * `output_name` - Name of the output to render to
+    /// * `previous_image` - Previous image for transition (None = use black dummy)
+    /// * `current_image` - Current/target image to display
+    /// * `progress` - Transition progress 0.0-1.0 (1.0 = show current fully, 0.0 = show previous)
+    /// * `transition_type` - Type of transition effect (0 = crossfade, etc.)
+    pub fn render_frame(
         &mut self,
         output_name: &str,
-        image_path: &Path,
+        previous_image: Option<&Path>,
+        current_image: &Path,
+        progress: f32,
+        transition_type: u32,
     ) -> color_eyre::Result<()> {
-        // Get target size first
+        // Get target size
         let target_size = {
             let surface_config = self.surface_configs.get(output_name).ok_or_else(|| {
                 color_eyre::eyre::eyre!("Surface config not found for output: {}", output_name)
@@ -721,31 +729,26 @@ impl WgpuRenderer {
             (surface_config.width, surface_config.height)
         };
 
-        // Load the new image texture
-        let current_cache_key = Self::cache_key(image_path, target_size);
-        self.load_image_texture(image_path, target_size)?;
+        // Load the current image texture
+        let current_cache_key = Self::cache_key(current_image, target_size);
+        self.load_image_texture(current_image, target_size)?;
 
-        // Get or create previous texture (either actual previous or dummy black)
-        let previous_cache_key = self
-            .current_image_keys
-            .get(output_name)
-            .cloned()
-            .unwrap_or_else(|| {
-                // First image on this output - create dummy texture
-                self.get_or_create_dummy_texture(target_size)
-                    .expect("Failed to create dummy texture")
-            });
+        // Load or create previous texture
+        let previous_cache_key = if let Some(prev_path) = previous_image {
+            let key = Self::cache_key(prev_path, target_size);
+            self.load_image_texture(prev_path, target_size)?;
+            key
+        } else {
+            // Use black dummy for first render or when no previous image
+            self.get_or_create_dummy_texture(target_size)?
+        };
 
-        // Create bind group with (previous, current) textures
+        // Create or get bind group with (previous, current) textures
         let bind_group_key =
             self.get_or_create_bind_group(&previous_cache_key, &current_cache_key)?;
 
-        // Reset progress to 1.0 to show the current image (tex2) fully
-        self.update_transition_params(1.0, 0, [0.0, 0.0])?;
-
-        // Update tracking for next transition
-        self.current_image_keys
-            .insert(output_name.to_string(), current_cache_key);
+        // Set transition parameters
+        self.update_transition_params(progress, transition_type, [0.0, 0.0])?;
 
         // Get references for rendering
         let device = self
@@ -785,7 +788,7 @@ impl WgpuRenderer {
         let mut encoder = device.create_command_encoder(&Default::default());
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Image Render Pass"),
+                label: Some("Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &surface_view,
                     resolve_target: None,
@@ -813,10 +816,6 @@ impl WgpuRenderer {
         Ok(())
     }
 
-    /// Handle frame rendering for a specific output - called from frame callback
-    pub fn handle_frame(&mut self, output_name: &str, image_path: &Path) -> color_eyre::Result<()> {
-        self.render_to_output(output_name, image_path)
-    }
 }
 
 #[repr(C)]

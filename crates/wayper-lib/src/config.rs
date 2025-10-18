@@ -12,6 +12,9 @@ pub struct Config {
     pub profiles: Profiles,
     pub reloaded: bool,
     pub path: Option<PathBuf>,
+    pub transitions_enabled: Option<bool>,
+    pub transition_fps: Option<u16>,
+    pub transition_duration: Option<u32>,
 }
 
 impl Config {
@@ -97,6 +100,10 @@ pub struct OutputConfig {
     pub duration: Option<u64>,
     pub path: PathBuf,
     pub run_command: Option<String>,
+    pub transitions_enabled: Option<bool>,
+    pub transition_fps: Option<u16>,
+    pub transition_type: Option<TransitionType>,
+    pub transition_duration: Option<u32>,
 }
 
 impl OutputConfig {
@@ -108,6 +115,28 @@ impl OutputConfig {
         let vecconf: HashMap<String, Self> = toml::from_str(&std::fs::read_to_string(path)?)?;
         dbg!(&vecconf);
         Ok(vecconf)
+    }
+
+    pub fn is_transitions_enabled(&self, global_config: &Config) -> bool {
+        self.transitions_enabled
+            .or(global_config.transitions_enabled)
+            .unwrap_or(false)
+    }
+
+    pub fn get_transition_duration(&self, global_config: &Config) -> u32 {
+        self.transition_duration
+            .or(global_config.transition_duration)
+            .unwrap_or(2000)
+    }
+
+    pub fn get_transition_fps(&self, global_config: &Config) -> u16 {
+        self.transition_fps
+            .or(global_config.transition_fps)
+            .unwrap_or(30)
+    }
+
+    pub fn get_transition_type(&self) -> TransitionType {
+        self.transition_type.unwrap_or(TransitionType::Crossfade)
     }
 }
 
@@ -122,6 +151,9 @@ struct ConfigReader {
     default_profile: String,
     #[serde(flatten)]
     pub outputs: HashMap<String, ProfileReader>,
+    pub transitions_enabled: Option<bool>,
+    pub transition_fps: Option<u16>,
+    pub transition_duration: Option<u32>,
 }
 
 impl ConfigReader {
@@ -146,6 +178,9 @@ impl ConfigReader {
 
         config.profiles = profiles;
         config.default_profile = self.default_profile;
+        config.transitions_enabled = self.transitions_enabled;
+        config.transition_fps = self.transition_fps;
+        config.transition_duration = self.transition_duration;
     }
 }
 
@@ -159,6 +194,20 @@ enum ProfileReader {
 impl Default for ProfileReader {
     fn default() -> Self {
         Self::Default(OutputConfig::default())
+    }
+}
+
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransitionType {
+    Crossfade,
+}
+
+impl TransitionType {
+    /// Convert transition type to u32 for shader uniform
+    pub fn to_u32(&self) -> u32 {
+        match self {
+            TransitionType::Crossfade => 0,
+        }
     }
 }
 
@@ -197,6 +246,10 @@ mod tests {
                 duration: Some(10),
                 path: "/home/user/wallpapers/personal".into(),
                 run_command: Some(String::from("matugen image {image}")),
+                transitions_enabled: None,
+                transition_fps: None,
+                transition_type: None,
+                transition_duration: None,
             },
         );
         assert_eq!(
@@ -204,7 +257,11 @@ mod tests {
             OutputConfig {
                 duration: Some(10),
                 path: "/home/user/wallpapers/work".into(),
-                run_command: None
+                run_command: None,
+                transitions_enabled: None,
+                transition_fps: None,
+                transition_type: None,
+                transition_duration: None,
             }
         );
 

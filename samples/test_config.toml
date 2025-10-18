@@ -1,10 +1,22 @@
 default_profile = "waifu"
+transitions_enabled = true
+transition_duration = 2000
+transition_fps = 30
 
 [waifu.eDP-1]
 duration = 10
 path = "samples/wallpapers/waifu"
 run_command = "matugen image {image} -m dark"
+transition_fps = 60
+transition_type = "Crossfade"
+# transition_duration = 2000
 # run_command = "wal -n -i {image} -e --cols16"
+
+[long.eDP-1]
+duration = 30
+path = "samples/wallpapers/waifu"
+run_command = "matugen image {image} -m dark"
+transition_type = "Crossfade"
 
 [work.eDP-1]
 duration = 10

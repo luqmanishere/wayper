@@ -55,12 +55,12 @@ impl LayerShellHandler for Wayper {
                     info!("first configure for surface {}", surface_id);
                     output_guard.dimensions = Some(configure.new_size);
 
-                    let output_name = &output_guard.output_name;
+                    let output_name = output_guard.output_name.clone();
 
                     // Configure the wgpu surface for this output
                     let surface_format = match self
                         .wgpu
-                        .configure_surface(output_name, (new_width, new_height))
+                        .configure_surface(&output_name, (new_width, new_height))
                     {
                         Ok(format) => format,
                         Err(e) => {
@@ -75,22 +75,62 @@ impl LayerShellHandler for Wayper {
                         return;
                     }
 
-                    // first render
-                    let first_image = output_guard.current_img();
-                    if let Some(image_path) = first_image
-                        && let Err(e) = self.wgpu.render_to_output(output_name, &image_path)
+                    let img_list_len = output_guard.img_list.len();
+                    let current_index = output_guard.index;
+
+                    if let Some(current_img) = output_guard.img_list.get(current_index)
+                        && let Err(e) = self.wgpu.request_texture_load(
+                            current_img,
+                            (new_width, new_height),
+                            output_name.clone(),
+                        )
                     {
-                        error!("Failed to render initial image: {}", e);
+                        error!("Failed to pre-load current image: {}", e);
                     }
 
-                    let next_image = output_guard.peek_next_img();
-                    if let Err(e) = self.wgpu.request_texture_load(
-                        &next_image,
-                        (new_width, new_height),
-                        output_name.to_string(),
-                    ) {
-                        error!("Failed to request pre-load of next image: {}", e);
+                    let next_index = (current_index + 1) % img_list_len;
+                    if let Some(next_img) = output_guard.img_list.get(next_index)
+                        && let Err(e) = self.wgpu.request_texture_load(
+                            next_img,
+                            (new_width, new_height),
+                            output_name.clone(),
+                        )
+                    {
+                        error!("Failed to pre-load next image: {}", e);
                     }
+
+                    // TODO: is this needed?
+                    let next_next_index = (current_index + 2) % img_list_len;
+                    if let Some(next_next_img) = output_guard.img_list.get(next_next_index)
+                        && let Err(e) = self.wgpu.request_texture_load(
+                            next_next_img,
+                            (new_width, new_height),
+                            output_name.clone(),
+                        )
+                    {
+                        error!("Failed to pre-load image after next: {}", e);
+                    }
+
+                    let (duration_ms, target_fps, transition_type) =
+                        if output_config.is_transitions_enabled(&self.config) {
+                            let duration = output_config.get_transition_duration(&self.config);
+                            let fps = output_config.get_transition_fps(&self.config);
+                            let ttype = output_config.get_transition_type();
+                            (duration, fps, ttype)
+                        } else {
+                            (1, 60, wayper_lib::config::TransitionType::Crossfade)
+                        };
+
+                    output_guard.transition = Some(crate::output::TransitionData::new(
+                        transition_type,
+                        duration_ms,
+                        target_fps,
+                    ));
+
+                    info!(
+                        "Starting initial render for {} ({} ms at {} FPS)",
+                        output_guard.output_name, duration_ms, target_fps
+                    );
 
                     layer.wl_surface().frame(_qh, layer.wl_surface().clone());
                     layer.wl_surface().commit();
@@ -100,9 +140,7 @@ impl LayerShellHandler for Wayper {
                     let (draw_source, ping_handle) =
                         DrawSource::from_duration(dur).expect("draw source can be initialized");
 
-                    ping_handle.ping();
                     output_guard.ping_draw = Some(ping_handle);
-                    output_guard.first_configure = false;
 
                     let draw_token = self
                         .c_queue_handle

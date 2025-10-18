@@ -114,6 +114,9 @@ impl Wayper {
 
             let img_list = utils::get_img_list(output_config.as_ref());
 
+            // transition config is set when wallpaper starts switching
+            let transition = None;
+
             outputs_map.insert(
                 name.clone(),
                 surface.id(),
@@ -135,6 +138,7 @@ impl Wayper {
                     visible: true,
                     should_next: false,
                     last_render_instant: Instant::now(),
+                    transition,
                 },
             );
         } else {
