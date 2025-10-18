@@ -161,6 +161,13 @@ fn texture_loader_worker(
     while let Ok(request) = load_rx.recv() {
         match load_resize_image(&request.image_path, request.target_size) {
             Ok((image_data, dimensions)) => {
+                tracing::debug!(
+                    "request from output {}, image {}@{}x{}",
+                    request.output_name,
+                    request.image_path.display(),
+                    request.target_size.0,
+                    request.target_size.1
+                );
                 let cache_key = format!(
                     "{}@{}x{}",
                     request.image_path.display(),

@@ -70,7 +70,6 @@ impl OutputRepr {
     }
 
     /// get the next image, without incrementing the index
-    #[expect(unused)]
     pub fn peek_next_img(&self) -> PathBuf {
         self.img_list[self.get_next_index()].clone()
     }

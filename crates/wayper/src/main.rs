@@ -18,7 +18,7 @@ use tracing::{info, level_filters::LevelFilter};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_log::LogTracer;
 use tracing_subscriber::{Layer as TLayer, fmt, prelude::__tracing_subscriber_SubscriberExt};
-use wallpaperhandler::Wayper;
+use handlers::Wayper;
 use wayper_lib::{
     config::Config,
     socket::{OutputWallpaper, SocketCommand, SocketError, SocketOutput, WayperSocket},
@@ -33,7 +33,7 @@ use crate::{
 mod map;
 mod output;
 // mod render_server;
-mod wallpaperhandler;
+mod handlers;
 mod wgpu_renderer;
 
 fn main() -> Result<()> {
@@ -111,7 +111,7 @@ fn main() -> Result<()> {
     // keep this alive until the end of the program
     let _socket_listener = socket.socket_sender_thread();
 
-    let mut data = wallpaperhandler::Wayper {
+    let mut data = handlers::Wayper {
         compositor_state: compositor,
         registry_state: RegistryState::new(&globals),
         output_state,
