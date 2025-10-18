@@ -35,10 +35,10 @@ impl CompositorHandler for Wayper {
     ) {
         trace!("frame called {:?} - {}", surface, time);
 
-        if let Ok(count) = self.wgpu.process_loaded_textures() {
-            if count > 0 {
-                debug!("Processed {} pre-loaded textures", count);
-            }
+        if let Ok(count) = self.wgpu.process_loaded_textures()
+            && count > 0
+        {
+            debug!("Processed {} pre-loaded textures", count);
         }
 
         let surface_id = surface.id();
@@ -68,14 +68,14 @@ impl CompositorHandler for Wayper {
                 output_handle.last_render_instant = Instant::now();
 
                 let next_image = output_handle.peek_next_img();
-                if let Some(dims) = output_handle.dimensions {
-                    if let Err(e) = self.wgpu.request_texture_load(
+                if let Some(dims) = output_handle.dimensions
+                    && let Err(e) = self.wgpu.request_texture_load(
                         &next_image,
                         dims,
                         output_handle.output_name.clone(),
-                    ) {
-                        error!("Failed to request pre-load: {}", e);
-                    }
+                    )
+                {
+                    error!("Failed to request pre-load: {}", e);
                 }
 
                 if let Some(config) = &output_handle.output_config
