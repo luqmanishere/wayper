@@ -15,6 +15,30 @@ use color_eyre::eyre::{WrapErr, eyre};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+/// Get the socket path for the current Wayland display.
+/// Each Wayland display gets its own socket to allow multiple wayper instances.
+pub fn get_socket_path() -> color_eyre::Result<PathBuf> {
+    let wayland_display = std::env::var("WAYLAND_DISPLAY")
+        .or_else(|_| std::env::var("WAYLAND_SOCKET"))
+        .unwrap_or_else(|_| "wayland-0".to_string());
+
+    // Sanitize the display name to be filesystem-safe
+    let display_name = wayland_display
+        .replace('/', "-")
+        .replace('.', "-");
+
+    let socket_dir = PathBuf::from("/tmp/wayper");
+
+    // Create the directory if it doesn't exist
+    if !socket_dir.exists() {
+        std::fs::create_dir_all(&socket_dir)?;
+    }
+
+    let socket_path = socket_dir.join(format!(".socket-{}.sock", display_name));
+
+    Ok(socket_path)
+}
+
 /// Helper struct for socket management
 pub struct WayperSocket {
     /// The path to the socket
@@ -36,27 +60,51 @@ impl WayperSocket {
     }
 
     /// Spawns a thread to forward accepted connections for the socket.
-    /// Returns an Error if called more than once.
+    /// Returns an Error if called more than once or if another instance is already running.
     pub fn socket_sender_thread(&mut self) -> Result<(), SocketError> {
         let socket_path = self.socket_path.clone();
         let socket_tx = self.tx.clone();
 
         if !self.spawned {
             self.spawned = true;
-            let sender_thread = std::thread::spawn(move || -> Result<(), SocketError> {
-                // metadata returns an [`Ok`] if the path exists
-                if std::fs::metadata(&socket_path).is_ok() {
-                    tracing::info!(
-                        "previous socket detected at \"{}\". removing!",
-                        socket_path.display()
-                    );
-                    std::fs::remove_file(&socket_path).map_err(|error| {
-                        SocketError::CannotDeletePreviousSocket {
+
+            // Check if socket exists and if another instance is running BEFORE spawning thread
+            // metadata returns an [`Ok`] if the path exists
+            if std::fs::metadata(&socket_path).is_ok() {
+                tracing::info!(
+                    "previous socket detected at \"{}\". checking if another instance is running...",
+                    socket_path.display()
+                );
+
+                // Try to connect to the existing socket to check if another instance is running
+                match UnixStream::connect(&socket_path) {
+                    Ok(_) => {
+                        // Successfully connected, another instance is running
+                        tracing::error!(
+                            "Another wayper instance is already running on this Wayland display (socket: {})",
+                            socket_path.display()
+                        );
+                        return Err(SocketError::AnotherInstanceRunning {
                             socket_path: socket_path.clone(),
-                            error: error.to_string(),
-                        }
-                    })?;
+                        });
+                    }
+                    Err(_) => {
+                        // Connection failed, socket is stale
+                        tracing::info!(
+                            "socket is stale (no active instance), removing: {}",
+                            socket_path.display()
+                        );
+                        std::fs::remove_file(&socket_path).map_err(|error| {
+                            SocketError::CannotDeletePreviousSocket {
+                                socket_path: socket_path.clone(),
+                                error: error.to_string(),
+                            }
+                        })?;
+                    }
                 }
+            }
+
+            let sender_thread = std::thread::spawn(move || -> Result<(), SocketError> {
 
                 // Create a new [`UnixListener`] by binding to the socket path
                 let unix_listener = UnixListener::bind(&socket_path).map_err(|e| {
@@ -156,10 +204,9 @@ pub enum SocketCommand {
 }
 
 fn profiles_from_socket_or_config() -> Vec<CompletionCandidate> {
-    const SOCKET_PATH: &str = "/tmp/wayper/.socket.sock";
-    let path = std::path::Path::new(SOCKET_PATH);
-    if path.exists()
-        && let Ok(mut stream) = UnixStream::connect(path)
+    if let Ok(socket_path) = get_socket_path()
+        && socket_path.exists()
+        && let Ok(mut stream) = UnixStream::connect(&socket_path)
         && let Ok(_) = SocketCommand::Profiles.write_to_socket(&mut stream)
         && let Ok(replies) = SocketOutput::from_socket(&mut stream)
         && let Some(SocketOutput::Profiles(profiles)) = replies.first()
@@ -220,6 +267,8 @@ pub enum SocketError {
         "The accepted socket connection sender thread should only be called once. Socket: {socket_path}"
     )]
     SpawnSenderOnce { socket_path: PathBuf },
+    #[error("Another wayper instance is already running on this Wayland display. Socket: {socket_path}")]
+    AnotherInstanceRunning { socket_path: PathBuf },
 }
 
 impl SocketError {

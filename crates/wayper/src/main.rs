@@ -21,7 +21,7 @@ use tracing_subscriber::{Layer as TLayer, fmt, prelude::__tracing_subscriber_Sub
 use handlers::Wayper;
 use wayper_lib::{
     config::Config,
-    socket::{OutputWallpaper, SocketCommand, SocketError, SocketOutput, WayperSocket},
+    socket::{OutputWallpaper, SocketCommand, SocketError, SocketOutput, WayperSocket, get_socket_path},
 };
 
 use crate::{
@@ -76,7 +76,10 @@ fn main() -> Result<()> {
     // channel based event source for our socket
     let (socket_tx, socket_channel) =
         calloop::channel::channel::<(SocketCommand, SyncSender<SocketOutput>)>();
-    let mut socket = WayperSocket::new("/tmp/wayper/.socket.sock".into(), socket_tx);
+
+    // Create a unique socket path per Wayland display
+    let socket_path = get_socket_path()?;
+    let mut socket = WayperSocket::new(socket_path, socket_tx);
 
     // insert the channel receiver as a source in calloop
     event_loop
@@ -109,7 +112,11 @@ fn main() -> Result<()> {
         .unwrap();
 
     // keep this alive until the end of the program
-    let _socket_listener = socket.socket_sender_thread();
+    // This will return an error if another instance is already running
+    socket.socket_sender_thread().map_err(|e| {
+        tracing::error!("Failed to start socket listener: {}", e);
+        color_eyre::eyre::eyre!(e.to_string())
+    })?;
 
     let mut data = handlers::Wayper {
         compositor_state: compositor,

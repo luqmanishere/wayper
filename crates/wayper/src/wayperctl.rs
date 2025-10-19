@@ -5,7 +5,7 @@ use color_eyre::eyre::{Result, WrapErr, eyre};
 use tracing::{info, level_filters::LevelFilter};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt};
-use wayper_lib::socket::{SocketCommand, SocketError, SocketOutput};
+use wayper_lib::socket::{SocketCommand, SocketError, SocketOutput, get_socket_path};
 
 fn main() -> Result<()> {
     clap_complete::CompleteEnv::with_factory(|| Cli::command().bin_name("wayperctl")).complete();
@@ -17,13 +17,13 @@ fn main() -> Result<()> {
     let mut cli = Cli::parse();
 
     let socket_path = if let Some(path) = cli.socket_path.take() {
-        path
+        std::path::PathBuf::from(path)
     } else {
-        "/tmp/wayper/.socket.sock".to_string()
+        get_socket_path()?
     };
 
     let mut stream = UnixStream::connect(&socket_path)
-        .wrap_err_with(|| eyre!("could not connect to wayper socket at {socket_path}"))?;
+        .wrap_err_with(|| eyre!("could not connect to wayper socket at {}", socket_path.display()))?;
 
     match cli.command {
         Commands::Socket(ref command) => {
