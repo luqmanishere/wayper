@@ -51,11 +51,25 @@
             src = self;
 
             # dependencies required to build
-            nativeBuildInputs = with pkgs; [pkg-config];
+            nativeBuildInputs = with pkgs; [pkg-config makeWrapper];
             buildInputs = with pkgs; [libxkbcommon wayland];
 
             cargoBuildOptions = x: x ++ ["--package" "wayper"];
             cargoTestOptions = x: x ++ ["--package" "wayper"];
+
+            postInstall = with pkgs; ''
+              wrapProgram $out/bin/wayper \
+                --set LD_LIBRARY_PATH ${
+                lib.makeLibraryPath [
+                  vulkan-headers
+                  vulkan-loader
+                  vulkan-tools
+                  vulkan-tools-lunarg
+                  vulkan-extension-layer
+                  vulkan-validation-layers
+                ]
+              }
+            '';
 
             inherit release;
           };
