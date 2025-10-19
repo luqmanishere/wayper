@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::Deref, path::Path, sync::mpsc::SyncSender};
+use std::{collections::HashMap, ops::Deref, path::Path, sync::mpsc::SyncSender, time::Instant};
 
 use clap::{Parser, ValueEnum};
 use color_eyre::Result;
@@ -238,6 +238,10 @@ fn handle_command(
         SocketCommand::Profiles => {
             socket_responses.push(SocketOutput::Profiles(wayper.config.profiles.profiles()))
         }
+        SocketCommand::GpuMetrics => {
+            let metrics = wayper.wgpu.get_metrics_data();
+            socket_responses.push(SocketOutput::GpuMetrics(metrics));
+        }
         // TODO: hide
         // TODO: show
         command => socket_responses.push(
@@ -269,6 +273,36 @@ fn handle_command(
     Ok(())
 }
 
+/// Custom timer that displays both wall-clock time and uptime since application start
+#[derive(Clone)]
+struct UptimeTimer {
+    start: Instant,
+}
+
+impl UptimeTimer {
+    fn new() -> Self {
+        Self {
+            start: Instant::now(),
+        }
+    }
+}
+
+impl tracing_subscriber::fmt::time::FormatTime for UptimeTimer {
+    fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> std::fmt::Result {
+        // Format wall-clock time
+        let now = std::time::SystemTime::now();
+        let datetime: chrono::DateTime<chrono::Utc> = now.into();
+        write!(w, "{}", datetime.format("%Y-%m-%dT%H:%M:%S%.3fZ"))?;
+
+        // Format uptime
+        let elapsed = self.start.elapsed();
+        let secs = elapsed.as_secs_f64();
+        write!(w, " [+{:.3}s]", secs)?;
+
+        Ok(())
+    }
+}
+
 fn start_logging(file_log_level: LogLevel) -> Vec<WorkerGuard> {
     let mut guards = Vec::new();
     let file_appender = tracing_appender::rolling::never("/tmp/wayper", "wayper-log");
@@ -276,18 +310,20 @@ fn start_logging(file_log_level: LogLevel) -> Vec<WorkerGuard> {
     // tracing_appender::non_blocking::NonBlockingBuilder
     guards.push(guard);
 
+    let uptime_timer = UptimeTimer::new();
+
     let subscriber = tracing_subscriber::registry()
         .with(
             fmt::Layer::new()
                 .with_writer(non_blocking)
                 .with_ansi(false)
-                // .with_timer(tracing_subscriber::fmt::time::time())
+                .with_timer(uptime_timer.clone())
                 .with_filter(file_log_level.as_loglevel()),
         )
         .with(
             fmt::layer()
                 .with_ansi(true)
-                .with_timer(tracing_subscriber::fmt::time::time())
+                .with_timer(uptime_timer)
                 .with_filter(file_log_level.as_loglevel()),
         );
 

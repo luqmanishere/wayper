@@ -3,7 +3,11 @@
 use std::{
     path::{Path, PathBuf},
     ptr::NonNull,
-    sync::mpsc::{Receiver, Sender},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        mpsc::{Receiver, Sender},
+    },
+    time::Instant,
 };
 
 use color_eyre::eyre::eyre;
@@ -12,6 +16,84 @@ use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
 };
 use wgpu::{naga::FastHashMap, util::DeviceExt};
+
+/// RAII timer for GPU operations - logs elapsed time on drop
+struct GpuOperationTimer {
+    start: Instant,
+    operation: &'static str,
+}
+
+impl GpuOperationTimer {
+    fn new(operation: &'static str) -> Self {
+        Self {
+            start: Instant::now(),
+            operation,
+        }
+    }
+}
+
+impl Drop for GpuOperationTimer {
+    fn drop(&mut self) {
+        let elapsed = self.start.elapsed();
+        tracing::trace!(
+            operation = self.operation,
+            time_us = elapsed.as_micros(),
+            "GPU operation completed"
+        );
+    }
+}
+
+/// GPU performance metrics
+#[derive(Debug, Default)]
+pub struct GpuMetrics {
+    pub texture_cache_hits: AtomicU64,
+    pub texture_cache_misses: AtomicU64,
+    pub bind_group_cache_hits: AtomicU64,
+    pub bind_group_cache_misses: AtomicU64,
+    pub total_textures_loaded: AtomicU64,
+    pub total_frames_rendered: AtomicU64,
+}
+
+impl GpuMetrics {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn log_metrics(&self, texture_cache_size: usize, bind_group_cache_size: usize) {
+        let texture_hits = self.texture_cache_hits.load(Ordering::Relaxed);
+        let texture_misses = self.texture_cache_misses.load(Ordering::Relaxed);
+        let bind_group_hits = self.bind_group_cache_hits.load(Ordering::Relaxed);
+        let bind_group_misses = self.bind_group_cache_misses.load(Ordering::Relaxed);
+        let textures_loaded = self.total_textures_loaded.load(Ordering::Relaxed);
+        let frames_rendered = self.total_frames_rendered.load(Ordering::Relaxed);
+
+        let texture_hit_rate = if texture_hits + texture_misses > 0 {
+            (texture_hits as f64 / (texture_hits + texture_misses) as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        let bind_group_hit_rate = if bind_group_hits + bind_group_misses > 0 {
+            (bind_group_hits as f64 / (bind_group_hits + bind_group_misses) as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        tracing::info!(
+            texture_cache_size = texture_cache_size,
+            texture_cache_hits = texture_hits,
+            texture_cache_misses = texture_misses,
+            texture_hit_rate = format!("{:.1}%", texture_hit_rate),
+            bind_group_cache_size = bind_group_cache_size,
+            bind_group_cache_hits = bind_group_hits,
+            bind_group_cache_misses = bind_group_misses,
+            bind_group_hit_rate = format!("{:.1}%", bind_group_hit_rate),
+            total_textures_loaded = textures_loaded,
+            total_frames_rendered = frames_rendered,
+            "GPU cache metrics"
+        );
+    }
+}
 
 pub struct WgpuRenderer {
     instance: wgpu::Instance,
@@ -32,6 +114,9 @@ pub struct WgpuRenderer {
 
     texture_loader_tx: Sender<TextureLoadRequest>,
     texture_loader_rx: Receiver<TextureLoadResult>,
+
+    /// Performance metrics
+    pub metrics: GpuMetrics,
     // TODO: proper keys
 }
 
@@ -67,6 +152,7 @@ impl WgpuRenderer {
             surface_configs: Default::default(),
             texture_loader_tx: load_tx,
             texture_loader_rx: result_rx,
+            metrics: GpuMetrics::new(),
         }
     }
 }
@@ -93,6 +179,7 @@ impl WgpuRenderer {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self))]
     pub fn process_loaded_textures(&mut self) -> color_eyre::Result<usize> {
         let device = self
             .device
@@ -156,14 +243,23 @@ fn texture_loader_worker(
     result_tx: Sender<TextureLoadResult>,
 ) {
     while let Ok(request) = load_rx.recv() {
+        let span = tracing::span!(
+            tracing::Level::DEBUG,
+            "texture_load",
+            output = %request.output_name,
+            path = %request.image_path.display(),
+            size = format!("{}x{}", request.target_size.0, request.target_size.1)
+        );
+        let _enter = span.enter();
+
+        let load_start = Instant::now();
         match load_resize_image(&request.image_path, request.target_size) {
             Ok((image_data, dimensions)) => {
+                let load_time = load_start.elapsed();
                 tracing::debug!(
-                    "request from output {}, image {}@{}x{}",
-                    request.output_name,
-                    request.image_path.display(),
-                    request.target_size.0,
-                    request.target_size.1
+                    time_ms = load_time.as_millis(),
+                    dimensions = format!("{}x{}", dimensions.0, dimensions.1),
+                    "Image loaded and resized"
                 );
                 let cache_key = format!(
                     "{}@{}x{}",
@@ -179,7 +275,7 @@ fn texture_loader_worker(
                 });
             }
             Err(e) => {
-                tracing::error!("Failed to load image {:?}: {}", request.image_path, e)
+                tracing::error!("Failed to load image: {}", e)
             }
         }
     }
@@ -237,6 +333,7 @@ impl WgpuRenderer {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self), fields(format = ?surface_format))]
     pub fn init_image_pipeline(
         &mut self,
         surface_format: wgpu::TextureFormat,
@@ -412,7 +509,7 @@ impl WgpuRenderer {
         self.transition_params_buf = Some(transition_params_buf);
         self.sampler = Some(sampler);
 
-        println!("Image pipeline initialized successfully");
+        tracing::info!("Image pipeline initialized successfully");
         Ok(())
     }
 
@@ -495,6 +592,8 @@ impl WgpuRenderer {
     }
 
     /// Load an image and create a wgpu texture from it
+    #[tracing::instrument(skip(self),
+        fields(path = %image_path.display(), size = format!("{}x{}", target_size.0, target_size.1)))]
     pub fn load_image_texture(
         &mut self,
         image_path: &Path,
@@ -513,8 +612,13 @@ impl WgpuRenderer {
 
         // Check if texture is already cached
         if self.texture_cache.contains_key(&cache_key) {
+            self.metrics.texture_cache_hits.fetch_add(1, Ordering::Relaxed);
+            tracing::trace!("Texture cache hit");
             return Ok(self.texture_cache.get(&cache_key).unwrap());
         }
+
+        self.metrics.texture_cache_misses.fetch_add(1, Ordering::Relaxed);
+        tracing::trace!("Texture cache miss - loading from disk");
 
         // Load and resize the image
         let img = image::open(image_path)?.resize_to_fill(
@@ -561,6 +665,7 @@ impl WgpuRenderer {
 
         // Cache the texture
         self.texture_cache.insert(cache_key.clone(), texture);
+        self.metrics.total_textures_loaded.fetch_add(1, Ordering::Relaxed);
         Ok(self.texture_cache.get(&cache_key).unwrap())
     }
 
@@ -575,8 +680,14 @@ impl WgpuRenderer {
 
         // Check if bind group is already cached
         if self.bind_group_cache.contains_key(&bind_group_key) {
+            self.metrics.bind_group_cache_hits.fetch_add(1, Ordering::Relaxed);
+            tracing::trace!("Bind group cache hit");
             return Ok(bind_group_key);
         }
+
+        self.metrics.bind_group_cache_misses.fetch_add(1, Ordering::Relaxed);
+        tracing::trace!("Bind group cache miss - creating new");
+
 
         let device = self
             .device
@@ -667,6 +778,8 @@ impl WgpuRenderer {
     }
 
     /// Configure surface for a specific output
+    #[tracing::instrument(skip(self),
+        fields(output = output_name, width = size.0, height = size.1))]
     pub fn configure_surface(
         &mut self,
         output_name: &str,
@@ -713,6 +826,8 @@ impl WgpuRenderer {
     /// * `current_image` - Current/target image to display
     /// * `progress` - Transition progress 0.0-1.0 (1.0 = show current fully, 0.0 = show previous)
     /// * `transition_type` - Type of transition effect (0 = crossfade, etc.)
+    #[tracing::instrument(skip(self, previous_image, current_image),
+        fields(output = output_name, progress = progress, transition_type = transition_type))]
     pub fn render_frame(
         &mut self,
         output_name: &str,
@@ -780,13 +895,18 @@ impl WgpuRenderer {
             .ok_or_else(|| color_eyre::eyre::eyre!("Bind group not found in cache"))?;
 
         // Get surface texture and render
+        let _surface_acquire_timer = GpuOperationTimer::new("surface_acquire");
         let surface_texture = surface.get_current_texture()?;
+        drop(_surface_acquire_timer);
+
         let surface_view = surface_texture
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
+        let _encoder_timer = GpuOperationTimer::new("command_encoder");
         let mut encoder = device.create_command_encoder(&Default::default());
         {
+            let _render_pass_timer = GpuOperationTimer::new("render_pass");
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -809,11 +929,43 @@ impl WgpuRenderer {
             render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             render_pass.draw_indexed(0..6, 0, 0..1);
         }
+        drop(_encoder_timer);
 
+        let _submit_timer = GpuOperationTimer::new("queue_submit");
         queue.submit(Some(encoder.finish()));
+        drop(_submit_timer);
+
+        let _present_timer = GpuOperationTimer::new("surface_present");
         surface_texture.present();
+        drop(_present_timer);
+
+        self.metrics.total_frames_rendered.fetch_add(1, Ordering::Relaxed);
 
         Ok(())
+    }
+
+    /// Log GPU performance metrics
+    pub fn log_gpu_metrics(&self) {
+        self.metrics.log_metrics(
+            self.texture_cache.len(),
+            self.bind_group_cache.len()
+        );
+    }
+
+    /// Get GPU metrics data for socket response
+    pub fn get_metrics_data(&self) -> wayper_lib::socket::GpuMetricsData {
+        use std::sync::atomic::Ordering;
+
+        wayper_lib::socket::GpuMetricsData {
+            texture_cache_size: self.texture_cache.len(),
+            texture_cache_hits: self.metrics.texture_cache_hits.load(Ordering::Relaxed),
+            texture_cache_misses: self.metrics.texture_cache_misses.load(Ordering::Relaxed),
+            bind_group_cache_size: self.bind_group_cache.len(),
+            bind_group_cache_hits: self.metrics.bind_group_cache_hits.load(Ordering::Relaxed),
+            bind_group_cache_misses: self.metrics.bind_group_cache_misses.load(Ordering::Relaxed),
+            total_textures_loaded: self.metrics.total_textures_loaded.load(Ordering::Relaxed),
+            total_frames_rendered: self.metrics.total_frames_rendered.load(Ordering::Relaxed),
+        }
     }
 
 }

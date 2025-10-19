@@ -129,6 +129,22 @@ fn main() -> Result<()> {
                         }
                     }
                 }
+                SocketCommand::GpuMetrics => {
+                    let replies = SocketOutput::from_socket(&mut stream)?;
+
+                    for reply in replies {
+                        handle_error_from_daemon(&cli, &reply)?;
+                        if let SocketOutput::GpuMetrics(ref metrics) = reply {
+                            if cli.json {
+                                println!("{}", reply.to_json().expect("convert to json"));
+                            } else {
+                                println!("{}", metrics);
+                            }
+                        } else {
+                            failed_to_get_response()?;
+                        }
+                    }
+                }
                 // this is also a template for handling commands
                 ref command => {
                     let replies = SocketOutput::from_socket(&mut stream)?;

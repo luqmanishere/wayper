@@ -150,6 +150,9 @@ pub enum SocketCommand {
 
     /// Display a list of configured profiles
     Profiles,
+
+    /// Display GPU performance metrics
+    GpuMetrics,
 }
 
 fn profiles_from_socket_or_config() -> Vec<CompletionCandidate> {
@@ -238,6 +241,8 @@ pub enum SocketOutput {
     SingleError(SocketError),
     MultipleErrors(Vec<SocketError>),
     Profiles(Vec<String>),
+    /// GPU performance metrics
+    GpuMetrics(GpuMetricsData),
     /// Signals end of reply for the previous request.
     End(String),
 }
@@ -318,6 +323,7 @@ impl std::fmt::Display for SocketOutput {
                 .collect::<Vec<_>>()
                 .join("\n"),
             SocketOutput::Profiles(items) => items.join("\n"),
+            SocketOutput::GpuMetrics(metrics) => metrics.to_string(),
             SocketOutput::End(command) => format!("end of command {command}"),
         };
 
@@ -337,6 +343,47 @@ pub struct OutputWallpaper {
 impl std::fmt::Display for OutputWallpaper {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: {}", self.output_name, self.wallpaper)
+    }
+}
+
+/// GPU performance metrics data
+#[derive(Deserialize, Serialize, Debug, PartialEq, Eq, Clone)]
+pub struct GpuMetricsData {
+    pub texture_cache_size: usize,
+    pub texture_cache_hits: u64,
+    pub texture_cache_misses: u64,
+    pub bind_group_cache_size: usize,
+    pub bind_group_cache_hits: u64,
+    pub bind_group_cache_misses: u64,
+    pub total_textures_loaded: u64,
+    pub total_frames_rendered: u64,
+}
+
+impl std::fmt::Display for GpuMetricsData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let texture_hit_rate = if self.texture_cache_hits + self.texture_cache_misses > 0 {
+            (self.texture_cache_hits as f64 / (self.texture_cache_hits + self.texture_cache_misses) as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        let bind_group_hit_rate = if self.bind_group_cache_hits + self.bind_group_cache_misses > 0 {
+            (self.bind_group_cache_hits as f64 / (self.bind_group_cache_hits + self.bind_group_cache_misses) as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        write!(f, "GPU Performance Metrics:\n")?;
+        write!(f, "  Texture Cache:\n")?;
+        write!(f, "    Size: {} textures\n", self.texture_cache_size)?;
+        write!(f, "    Hits: {} | Misses: {} | Hit Rate: {:.1}%\n",
+               self.texture_cache_hits, self.texture_cache_misses, texture_hit_rate)?;
+        write!(f, "  Bind Group Cache:\n")?;
+        write!(f, "    Size: {} bind groups\n", self.bind_group_cache_size)?;
+        write!(f, "    Hits: {} | Misses: {} | Hit Rate: {:.1}%\n",
+               self.bind_group_cache_hits, self.bind_group_cache_misses, bind_group_hit_rate)?;
+        write!(f, "  Total Textures Loaded: {}\n", self.total_textures_loaded)?;
+        write!(f, "  Total Frames Rendered: {}", self.total_frames_rendered)
     }
 }
 

@@ -26,6 +26,7 @@ impl CompositorHandler for Wayper {
         );
     }
 
+    #[tracing::instrument(skip_all, fields(surface_id = %surface.id(), time = time))]
     fn frame(
         &mut self,
         _conn: &client::Connection,
@@ -34,12 +35,18 @@ impl CompositorHandler for Wayper {
         time: u32,
     ) {
         // TODO: visibility via logs. considering slog
-        trace!("frame called {:?} - {}", surface, time);
+        trace!("frame called");
 
+        let process_start = Instant::now();
         if let Ok(count) = self.wgpu.process_loaded_textures()
             && count > 0
         {
-            debug!("Processed {} pre-loaded textures", count);
+            let process_time = process_start.elapsed();
+            debug!(
+                count = count,
+                time_us = process_time.as_micros(),
+                "Processed pre-loaded textures"
+            );
         }
 
         let surface_id = surface.id();
@@ -52,16 +59,28 @@ impl CompositorHandler for Wayper {
 
                 // rip any compositors that can't handle this
                 if !transition.should_render_frame() {
+                    trace!("Frame skipped - FPS throttle");
                     surface.frame(_qh, surface.clone());
                     surface.commit();
                     return;
                 }
 
                 // i wonder if this is good practice or nah?
-                let progress = transition.eased_progress();
+                let progress = transition.progress();
+                let eased_progress = transition.eased_progress();
                 let transition_type = transition.transition_type.to_u32();
                 let is_complete = transition.is_complete();
+                let transition_elapsed = transition.start_time
+                    .map(|t| t.elapsed().as_millis())
+                    .unwrap_or(0);
                 let output_name = output_handle.output_name.clone();
+
+                trace!(
+                    progress = progress,
+                    eased_progress = eased_progress,
+                    elapsed_ms = transition_elapsed,
+                    "Transition frame"
+                );
 
                 let previous_img = output_handle.previous_img();
                 let Some(current_img) = output_handle.current_img() else {
@@ -69,20 +88,44 @@ impl CompositorHandler for Wayper {
                     return;
                 };
 
+                let render_start = Instant::now();
                 if let Err(e) = self.wgpu.render_frame(
                     &output_name,
                     previous_img.as_deref(),
                     &current_img,
-                    progress,
+                    eased_progress,
                     transition_type,
                 ) {
                     error!("failed to render transition frame: {e}");
                 }
+                let render_time = render_start.elapsed();
+                trace!(render_time_us = render_time.as_micros(), "GPU render time");
 
                 if is_complete {
+                    let current_index = output_handle.index;
+                    let current_image = output_handle.current_img();
+
+                    info!(
+                        "{} showing [{}] {}",
+                        output_name,
+                        current_index,
+                        current_image.as_ref()
+                            .and_then(|p| p.file_name())
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("unknown")
+                    );
+
                     debug!("Transition complete for {}", output_name);
                     output_handle.transition = None;
                     output_handle.last_render_instant = Instant::now();
+                    output_handle.frame_count += 1;
+
+                    // Log GPU metrics every 100 frames
+                    if output_handle.frame_count % 100 == 0 {
+                        drop(output_handle);
+                        self.wgpu.log_gpu_metrics();
+                        output_handle = output.lock().unwrap();
+                    }
 
                     if output_handle.first_configure {
                         output_handle.first_configure = false;
@@ -93,7 +136,14 @@ impl CompositorHandler for Wayper {
                 surface.commit();
             } else if output_handle.should_next {
                 let last_render = output_handle.last_render_instant.elapsed();
-                debug!("last render was {}s ago", last_render.as_secs_f64());
+                let output_age = output_handle.created_at.elapsed();
+                let frame_count = output_handle.frame_count;
+                debug!(
+                    "last render was {:.3}s ago | output age: {:.3}s | frame: {}",
+                    last_render.as_secs_f64(),
+                    output_age.as_secs_f64(),
+                    frame_count
+                );
 
                 output_handle.next();
 
@@ -120,17 +170,29 @@ impl CompositorHandler for Wayper {
                         target_fps,
                     ));
 
+                    let transition_name = match transition_type {
+                        wayper_lib::config::TransitionType::Crossfade => "crossfade",
+                    };
+
                     info!(
-                        "Starting {} transition for {} at {} FPS",
-                        match transition_type {
-                            wayper_lib::config::TransitionType::Crossfade => "crossfade",
-                        },
+                        "{} transitioning with {}",
                         output_handle.output_name,
+                        transition_name
+                    );
+
+                    debug!(
+                        "Starting {} transition for {} (duration: {}ms, {} FPS)",
+                        transition_name,
+                        output_handle.output_name,
+                        duration_ms,
                         target_fps
                     );
 
                     surface.frame(_qh, surface.clone());
                 } else {
+                    let current_index = output_handle.index;
+                    let output_name = output_handle.output_name.clone();
+
                     let previous_img = output_handle.previous_img();
                     if let Err(e) = self.wgpu.render_frame(
                         &output_handle.output_name,
@@ -141,7 +203,27 @@ impl CompositorHandler for Wayper {
                     ) {
                         error!("failed to render frame: {e}");
                     }
+
+                    let filename = image.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown");
+
+                    info!(
+                        "{} showing [{}] {}",
+                        output_name,
+                        current_index,
+                        filename
+                    );
+
                     output_handle.last_render_instant = Instant::now();
+                    output_handle.frame_count += 1;
+
+                    // Log GPU metrics every 100 frames
+                    if output_handle.frame_count % 100 == 0 {
+                        drop(output_handle);
+                        self.wgpu.log_gpu_metrics();
+                        output_handle = output.lock().unwrap();
+                    }
                 }
 
                 output_handle.should_next = false;

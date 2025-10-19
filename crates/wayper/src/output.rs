@@ -38,6 +38,11 @@ pub struct OutputRepr {
     pub should_next: bool,
     pub last_render_instant: std::time::Instant,
     pub transition: Option<TransitionData>,
+
+    /// When this output was created/added
+    pub created_at: std::time::Instant,
+    /// Total number of frames rendered for this output
+    pub frame_count: u64,
 }
 
 impl OutputRepr {

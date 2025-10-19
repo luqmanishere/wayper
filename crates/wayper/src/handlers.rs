@@ -57,6 +57,7 @@ pub struct Wayper {
 // TODO: modularize with calloop?
 
 impl Wayper {
+    #[tracing::instrument(skip_all, fields(name = tracing::field::Empty))]
     pub fn add_output(
         &mut self,
         _conn: &client::Connection,
@@ -117,6 +118,7 @@ impl Wayper {
             // transition config is set when wallpaper starts switching
             let transition = None;
 
+            let now = Instant::now();
             outputs_map.insert(
                 name.clone(),
                 surface.id(),
@@ -137,20 +139,25 @@ impl Wayper {
                     index: 0,
                     visible: true,
                     should_next: false,
-                    last_render_instant: Instant::now(),
+                    last_render_instant: now,
                     transition,
+                    created_at: now,
+                    frame_count: 0,
                 },
             );
         } else {
             warn!("we had this output {name} earlier, skipping....");
         }
     }
+    #[tracing::instrument(skip_all, fields(profile = tracing::field::Empty))]
     pub fn change_profile<P>(&mut self, profile: P) -> color_eyre::Result<String>
     where
         P: Into<Option<String>>,
     {
         let profile =
             Into::<Option<String>>::into(profile).unwrap_or(self.config.default_profile.clone());
+        tracing::Span::current().record("profile", &profile);
+
         if !&self
             .config
             .profiles
