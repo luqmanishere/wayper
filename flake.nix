@@ -52,7 +52,7 @@
 
             # dependencies required to build
             nativeBuildInputs = with pkgs; [pkg-config];
-            buildInputs = with pkgs; [libxkbcommon];
+            buildInputs = with pkgs; [libxkbcommon wayland];
 
             cargoBuildOptions = x: x ++ ["--package" "wayper"];
             cargoTestOptions = x: x ++ ["--package" "wayper"];
@@ -69,7 +69,7 @@
 
             # dependencies required to build
             nativeBuildInputs = with pkgs; [pkg-config];
-            buildInputs = with pkgs; [libxkbcommon];
+            buildInputs = with pkgs; [libxkbcommon wayland];
 
             cargoBuildOptions = x: x ++ ["--package" "wayper-launcher"];
             cargoTestOptions = x: x ++ ["--package" "wayper-launcher"];
@@ -91,9 +91,8 @@
         packages.wayper-launcher-release = wayper-launcher-builder {release = true;};
         packages.wayper-launcher-debug = wayper-launcher-builder {release = false;};
 
-        devShells.default =
-         let 
-         buildInputs = with pkgs; [
+        devShells.default = let
+          buildInputs = with pkgs; [
             toolchain
             just
             ripgrep
@@ -108,25 +107,31 @@
             psrecord
             cargo-machete
 
-             libxkbcommon
-    wayland xorg.libX11 xorg.libXcursor xorg.libXrandr xorg.libXi
-    libGL
-    vulkan-headers vulkan-loader
-    vulkan-tools vulkan-tools-lunarg
-    vulkan-extension-layer
-    vulkan-validation-layers
+            libxkbcommon
+            wayland
+            xorg.libX11
+            xorg.libXcursor
+            xorg.libXrandr
+            xorg.libXi
+            libGL
+            vulkan-headers
+            vulkan-loader
+            vulkan-tools
+            vulkan-tools-lunarg
+            vulkan-extension-layer
+            vulkan-validation-layers
 
-    wgsl-analyzer
+            wgsl-analyzer
           ];
-         in 
-           pkgs.mkShell {
-          nativeBuildInputs = with pkgs; [pkg-config];
-          inherit buildInputs;
-          inputsFrom = [packages.default];
-          shellHook = ''
-            export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:${builtins.toString (pkgs.lib.makeLibraryPath buildInputs)}";
-          '';
-        };
+        in
+          pkgs.mkShell {
+            nativeBuildInputs = with pkgs; [pkg-config];
+            inherit buildInputs;
+            inputsFrom = [packages.default];
+            shellHook = ''
+              export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:${builtins.toString (pkgs.lib.makeLibraryPath buildInputs)}";
+            '';
+          };
 
         # export overlay using easyOverlays
         overlayAttrs = {
