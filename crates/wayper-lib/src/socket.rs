@@ -23,9 +23,7 @@ pub fn get_socket_path() -> color_eyre::Result<PathBuf> {
         .unwrap_or_else(|_| "wayland-0".to_string());
 
     // Sanitize the display name to be filesystem-safe
-    let display_name = wayland_display
-        .replace('/', "-")
-        .replace('.', "-");
+    let display_name = wayland_display.replace(['/', '.'], "-");
 
     let socket_dir = PathBuf::from("/tmp/wayper");
 
@@ -105,7 +103,6 @@ impl WayperSocket {
             }
 
             let sender_thread = std::thread::spawn(move || -> Result<(), SocketError> {
-
                 // Create a new [`UnixListener`] by binding to the socket path
                 let unix_listener = UnixListener::bind(&socket_path).map_err(|e| {
                     SocketError::CannotBindUnixSocket {
@@ -267,7 +264,9 @@ pub enum SocketError {
         "The accepted socket connection sender thread should only be called once. Socket: {socket_path}"
     )]
     SpawnSenderOnce { socket_path: PathBuf },
-    #[error("Another wayper instance is already running on this Wayland display. Socket: {socket_path}")]
+    #[error(
+        "Another wayper instance is already running on this Wayland display. Socket: {socket_path}"
+    )]
     AnotherInstanceRunning { socket_path: PathBuf },
 }
 
@@ -411,27 +410,41 @@ pub struct GpuMetricsData {
 impl std::fmt::Display for GpuMetricsData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let texture_hit_rate = if self.texture_cache_hits + self.texture_cache_misses > 0 {
-            (self.texture_cache_hits as f64 / (self.texture_cache_hits + self.texture_cache_misses) as f64) * 100.0
+            (self.texture_cache_hits as f64
+                / (self.texture_cache_hits + self.texture_cache_misses) as f64)
+                * 100.0
         } else {
             0.0
         };
 
         let bind_group_hit_rate = if self.bind_group_cache_hits + self.bind_group_cache_misses > 0 {
-            (self.bind_group_cache_hits as f64 / (self.bind_group_cache_hits + self.bind_group_cache_misses) as f64) * 100.0
+            (self.bind_group_cache_hits as f64
+                / (self.bind_group_cache_hits + self.bind_group_cache_misses) as f64)
+                * 100.0
         } else {
             0.0
         };
 
-        write!(f, "GPU Performance Metrics:\n")?;
-        write!(f, "  Texture Cache:\n")?;
-        write!(f, "    Size: {} textures\n", self.texture_cache_size)?;
-        write!(f, "    Hits: {} | Misses: {} | Hit Rate: {:.1}%\n",
-               self.texture_cache_hits, self.texture_cache_misses, texture_hit_rate)?;
-        write!(f, "  Bind Group Cache:\n")?;
-        write!(f, "    Size: {} bind groups\n", self.bind_group_cache_size)?;
-        write!(f, "    Hits: {} | Misses: {} | Hit Rate: {:.1}%\n",
-               self.bind_group_cache_hits, self.bind_group_cache_misses, bind_group_hit_rate)?;
-        write!(f, "  Total Textures Loaded: {}\n", self.total_textures_loaded)?;
+        writeln!(f, "GPU Performance Metrics:")?;
+        writeln!(f, "  Texture Cache:")?;
+        writeln!(f, "    Size: {} textures", self.texture_cache_size)?;
+        writeln!(
+            f,
+            "    Hits: {} | Misses: {} | Hit Rate: {:.1}%",
+            self.texture_cache_hits, self.texture_cache_misses, texture_hit_rate
+        )?;
+        writeln!(f, "  Bind Group Cache:")?;
+        writeln!(f, "    Size: {} bind groups", self.bind_group_cache_size)?;
+        writeln!(
+            f,
+            "    Hits: {} | Misses: {} | Hit Rate: {:.1}%",
+            self.bind_group_cache_hits, self.bind_group_cache_misses, bind_group_hit_rate
+        )?;
+        writeln!(
+            f,
+            "  Total Textures Loaded: {}",
+            self.total_textures_loaded
+        )?;
         write!(f, "  Total Frames Rendered: {}", self.total_frames_rendered)
     }
 }
