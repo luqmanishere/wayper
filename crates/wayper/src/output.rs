@@ -138,18 +138,25 @@ pub struct TransitionData {
     pub duration_ms: u32,
     pub target_fps: u16,
     pub last_frame_time: std::time::Instant,
+    pub direction: [f32; 2],
 }
 
 impl TransitionData {
     /// Create a new transition with the given parameters
     /// Timer starts on first frame render, not at creation time
-    pub fn new(transition_type: TransitionType, duration_ms: u32, target_fps: u16) -> Self {
+    pub fn new(
+        transition_type: TransitionType,
+        duration_ms: u32,
+        target_fps: u16,
+        direction: [f32; 2],
+    ) -> Self {
         Self {
             transition_type,
             start_time: None, // Will be set on first frame
             duration_ms,
             target_fps,
             last_frame_time: std::time::Instant::now(),
+            direction,
         }
     }
 

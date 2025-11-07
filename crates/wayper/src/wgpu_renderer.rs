@@ -612,12 +612,16 @@ impl WgpuRenderer {
 
         // Check if texture is already cached
         if self.texture_cache.contains_key(&cache_key) {
-            self.metrics.texture_cache_hits.fetch_add(1, Ordering::Relaxed);
+            self.metrics
+                .texture_cache_hits
+                .fetch_add(1, Ordering::Relaxed);
             tracing::trace!("Texture cache hit");
             return Ok(self.texture_cache.get(&cache_key).unwrap());
         }
 
-        self.metrics.texture_cache_misses.fetch_add(1, Ordering::Relaxed);
+        self.metrics
+            .texture_cache_misses
+            .fetch_add(1, Ordering::Relaxed);
         tracing::trace!("Texture cache miss - loading from disk");
 
         // Load and resize the image
@@ -665,7 +669,9 @@ impl WgpuRenderer {
 
         // Cache the texture
         self.texture_cache.insert(cache_key.clone(), texture);
-        self.metrics.total_textures_loaded.fetch_add(1, Ordering::Relaxed);
+        self.metrics
+            .total_textures_loaded
+            .fetch_add(1, Ordering::Relaxed);
         Ok(self.texture_cache.get(&cache_key).unwrap())
     }
 
@@ -680,14 +686,17 @@ impl WgpuRenderer {
 
         // Check if bind group is already cached
         if self.bind_group_cache.contains_key(&bind_group_key) {
-            self.metrics.bind_group_cache_hits.fetch_add(1, Ordering::Relaxed);
+            self.metrics
+                .bind_group_cache_hits
+                .fetch_add(1, Ordering::Relaxed);
             tracing::trace!("Bind group cache hit");
             return Ok(bind_group_key);
         }
 
-        self.metrics.bind_group_cache_misses.fetch_add(1, Ordering::Relaxed);
+        self.metrics
+            .bind_group_cache_misses
+            .fetch_add(1, Ordering::Relaxed);
         tracing::trace!("Bind group cache miss - creating new");
-
 
         let device = self
             .device
@@ -835,7 +844,9 @@ impl WgpuRenderer {
         current_image: &Path,
         progress: f32,
         transition_type: u32,
+        direction: Option<[f32; 2]>,
     ) -> color_eyre::Result<()> {
+        let direction = direction.unwrap_or([0.0, 0.0]);
         // Get target size
         let target_size = {
             let surface_config = self.surface_configs.get(output_name).ok_or_else(|| {
@@ -863,7 +874,7 @@ impl WgpuRenderer {
             self.get_or_create_bind_group(&previous_cache_key, &current_cache_key)?;
 
         // Set transition parameters
-        self.update_transition_params(progress, transition_type, [0.0, 0.0])?;
+        self.update_transition_params(progress, transition_type, direction)?;
 
         // Get references for rendering
         let device = self
@@ -939,17 +950,17 @@ impl WgpuRenderer {
         surface_texture.present();
         drop(_present_timer);
 
-        self.metrics.total_frames_rendered.fetch_add(1, Ordering::Relaxed);
+        self.metrics
+            .total_frames_rendered
+            .fetch_add(1, Ordering::Relaxed);
 
         Ok(())
     }
 
     /// Log GPU performance metrics
     pub fn log_gpu_metrics(&self) {
-        self.metrics.log_metrics(
-            self.texture_cache.len(),
-            self.bind_group_cache.len()
-        );
+        self.metrics
+            .log_metrics(self.texture_cache.len(), self.bind_group_cache.len());
     }
 
     /// Get GPU metrics data for socket response
@@ -967,7 +978,6 @@ impl WgpuRenderer {
             total_frames_rendered: self.metrics.total_frames_rendered.load(Ordering::Relaxed),
         }
     }
-
 }
 
 #[repr(C)]

@@ -104,6 +104,7 @@ pub struct OutputConfig {
     pub transition_fps: Option<u16>,
     pub transition_type: Option<TransitionType>,
     pub transition_duration: Option<u32>,
+    pub sweep_direction: Option<SweepDirection>,
 }
 
 impl OutputConfig {
@@ -137,6 +138,19 @@ impl OutputConfig {
 
     pub fn get_transition_type(&self) -> TransitionType {
         self.transition_type.unwrap_or(TransitionType::Crossfade)
+    }
+
+    pub fn get_transition_direction(&self) -> [f32; 2] {
+        match self.get_transition_type() {
+            TransitionType::Crossfade => [0.0, 0.0],
+            TransitionType::Sweep => {
+                if let Some(sweep_dir) = self.sweep_direction {
+                    sweep_dir.as_direction()
+                } else {
+                    [0.0, 0.0]
+                }
+            }
+        }
     }
 }
 
@@ -200,6 +214,7 @@ impl Default for ProfileReader {
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TransitionType {
     Crossfade,
+    Sweep,
 }
 
 impl TransitionType {
@@ -207,6 +222,26 @@ impl TransitionType {
     pub fn to_u32(&self) -> u32 {
         match self {
             TransitionType::Crossfade => 0,
+            TransitionType::Sweep => 1,
+        }
+    }
+}
+
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SweepDirection {
+    LR,
+    RL,
+    TB,
+    BT,
+}
+
+impl SweepDirection {
+    pub fn as_direction(&self) -> [f32; 2] {
+        match self {
+            SweepDirection::LR => [1.0, 0.0],
+            SweepDirection::RL => [-1.0, 0.0],
+            SweepDirection::TB => [0.0, 1.0],
+            SweepDirection::BT => [1.0, 1.0],
         }
     }
 }
@@ -250,6 +285,7 @@ mod tests {
                 transition_fps: None,
                 transition_type: None,
                 transition_duration: None,
+                sweep_direction: None
             },
         );
         assert_eq!(
@@ -262,6 +298,7 @@ mod tests {
                 transition_fps: None,
                 transition_type: None,
                 transition_duration: None,
+                sweep_direction: None
             }
         );
 

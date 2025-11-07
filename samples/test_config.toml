@@ -8,7 +8,8 @@ duration = 10
 path = "samples/wallpapers/waifu"
 run_command = "matugen image {image} -m dark"
 transition_fps = 60
-transition_type = "Crossfade"
+transition_type = "Sweep"
+sweep_direction = "LR"
 # transition_duration = 2000
 # run_command = "wal -n -i {image} -e --cols16"
 

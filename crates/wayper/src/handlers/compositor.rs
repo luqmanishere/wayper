@@ -69,8 +69,10 @@ impl CompositorHandler for Wayper {
                 let progress = transition.progress();
                 let eased_progress = transition.eased_progress();
                 let transition_type = transition.transition_type.to_u32();
+                let transition_direction = transition.direction;
                 let is_complete = transition.is_complete();
-                let transition_elapsed = transition.start_time
+                let transition_elapsed = transition
+                    .start_time
                     .map(|t| t.elapsed().as_millis())
                     .unwrap_or(0);
                 let output_name = output_handle.output_name.clone();
@@ -95,6 +97,7 @@ impl CompositorHandler for Wayper {
                     &current_img,
                     eased_progress,
                     transition_type,
+                    Some(transition_direction),
                 ) {
                     error!("failed to render transition frame: {e}");
                 }
@@ -109,7 +112,8 @@ impl CompositorHandler for Wayper {
                         "{} showing [{}] {}",
                         output_name,
                         current_index,
-                        current_image.as_ref()
+                        current_image
+                            .as_ref()
                             .and_then(|p| p.file_name())
                             .and_then(|n| n.to_str())
                             .unwrap_or("unknown")
@@ -163,29 +167,28 @@ impl CompositorHandler for Wayper {
                     let duration_ms = config.get_transition_duration(&self.config);
                     let target_fps = config.get_transition_fps(&self.config);
                     let transition_type = config.get_transition_type();
+                    let transition_direction = config.get_transition_direction();
 
                     output_handle.transition = Some(crate::output::TransitionData::new(
                         transition_type,
                         duration_ms,
                         target_fps,
+                        transition_direction,
                     ));
 
                     let transition_name = match transition_type {
                         wayper_lib::config::TransitionType::Crossfade => "crossfade",
+                        wayper_lib::config::TransitionType::Sweep => "sweep",
                     };
 
                     info!(
                         "{} transitioning with {}",
-                        output_handle.output_name,
-                        transition_name
+                        output_handle.output_name, transition_name
                     );
 
                     debug!(
                         "Starting {} transition for {} (duration: {}ms, {} FPS)",
-                        transition_name,
-                        output_handle.output_name,
-                        duration_ms,
-                        target_fps
+                        transition_name, output_handle.output_name, duration_ms, target_fps
                     );
 
                     surface.frame(_qh, surface.clone());
@@ -200,20 +203,17 @@ impl CompositorHandler for Wayper {
                         image.as_path(),
                         1.0,
                         0,
+                        None,
                     ) {
                         error!("failed to render frame: {e}");
                     }
 
-                    let filename = image.file_name()
+                    let filename = image
+                        .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or("unknown");
 
-                    info!(
-                        "{} showing [{}] {}",
-                        output_name,
-                        current_index,
-                        filename
-                    );
+                    info!("{} showing [{}] {}", output_name, current_index, filename);
 
                     output_handle.last_render_instant = Instant::now();
                     output_handle.frame_count += 1;

@@ -111,20 +111,27 @@ impl LayerShellHandler for Wayper {
                         error!("Failed to pre-load image after next: {}", e);
                     }
 
-                    let (duration_ms, target_fps, transition_type) =
+                    let (duration_ms, target_fps, transition_type, transition_direction) =
                         if output_config.is_transitions_enabled(&self.config) {
                             let duration = output_config.get_transition_duration(&self.config);
                             let fps = output_config.get_transition_fps(&self.config);
                             let ttype = output_config.get_transition_type();
-                            (duration, fps, ttype)
+                            let td = output_config.get_transition_direction();
+                            (duration, fps, ttype, td)
                         } else {
-                            (1, 60, wayper_lib::config::TransitionType::Crossfade)
+                            (
+                                1,
+                                60,
+                                wayper_lib::config::TransitionType::Crossfade,
+                                [0.0, 0.0],
+                            )
                         };
 
                     output_guard.transition = Some(crate::output::TransitionData::new(
                         transition_type,
                         duration_ms,
                         target_fps,
+                        transition_direction,
                     ));
 
                     info!(

@@ -43,6 +43,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     // crossfade transition (anim_type == 0)
     if u_params.anim_type == 0u {
         return mix(color1, color2, progress);
+    } else if u_params.anim_type == 1u {
+        // Sweep with soft edge
+        let sweep_dir = normalize(u_params.direction);
+        let coord = in.uv.x * abs(sweep_dir.x) + in.uv.y * abs(sweep_dir.y);
+
+        let edge_width = 0.05;
+        // Map progress from [0, 1] to [-edge_width, 1 + edge_width]
+        let sweep_position = u_params.progress * (1.0 + 2.0 * edge_width) - edge_width;
+
+        let blend_factor = smoothstep(sweep_position - edge_width, sweep_position + edge_width, coord);
+
+        return mix(color2, color1, blend_factor);
     }
 
     // TODO: seperate transitions into different files
