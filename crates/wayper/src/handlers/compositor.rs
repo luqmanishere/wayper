@@ -156,18 +156,27 @@ impl CompositorHandler for Wayper {
                     return;
                 };
 
-                let should_animate = if let Some(config) = &output_handle.output_config {
-                    config.is_transitions_enabled(&self.config)
-                } else {
-                    false
-                };
+                let should_transition = output_handle
+                    .output_config
+                    .as_ref()
+                    .map(|cfg| cfg.is_transitions_enabled(&self.config))
+                    .unwrap_or(true);
 
-                if should_animate {
-                    let config = output_handle.output_config.as_ref().unwrap();
-                    let duration_ms = config.get_transition_duration(&self.config);
-                    let target_fps = config.get_transition_fps(&self.config);
-                    let transition_type = config.get_transition_type();
-                    let transition_direction = config.get_transition_direction();
+                let transition_config = output_handle
+                    .output_config
+                    .as_ref()
+                    .and_then(|cfg| cfg.get_transition_config(&self.config));
+
+                if should_transition && let Some(transition_cfg) = transition_config {
+                    let transition_type = transition_cfg.pick_random_type();
+                    let duration_ms = transition_cfg.duration_ms;
+                    let target_fps = transition_cfg.fps;
+                    let transition_direction = match transition_type {
+                        wayper_lib::config::TransitionTypeEnum::Crossfade => [0.0, 0.0],
+                        wayper_lib::config::TransitionTypeEnum::Sweep => {
+                            transition_cfg.sweep.direction.as_vec2()
+                        }
+                    };
 
                     output_handle.transition = Some(crate::output::TransitionData::new(
                         transition_type,
@@ -177,8 +186,8 @@ impl CompositorHandler for Wayper {
                     ));
 
                     let transition_name = match transition_type {
-                        wayper_lib::config::TransitionType::Crossfade => "crossfade",
-                        wayper_lib::config::TransitionType::Sweep => "sweep",
+                        wayper_lib::config::TransitionTypeEnum::Crossfade => "crossfade",
+                        wayper_lib::config::TransitionTypeEnum::Sweep => "sweep",
                     };
 
                     info!(

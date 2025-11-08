@@ -12,7 +12,7 @@ use smithay_client_toolkit::{
     shm::slot::Buffer,
 };
 
-use wayper_lib::config::{OutputConfig, TransitionType};
+use wayper_lib::config::{OutputConfig, TransitionTypeEnum};
 
 // TODO: maybe all pub is not a good idea
 
@@ -133,7 +133,7 @@ impl OutputRepr {
 
 #[derive(Debug)]
 pub struct TransitionData {
-    pub transition_type: TransitionType,
+    pub transition_type: TransitionTypeEnum,
     pub start_time: Option<std::time::Instant>,
     pub duration_ms: u32,
     pub target_fps: u16,
@@ -145,7 +145,7 @@ impl TransitionData {
     /// Create a new transition with the given parameters
     /// Timer starts on first frame render, not at creation time
     pub fn new(
-        transition_type: TransitionType,
+        transition_type: TransitionTypeEnum,
         duration_ms: u32,
         target_fps: u16,
         direction: [f32; 2],

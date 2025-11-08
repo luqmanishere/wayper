@@ -1,0 +1,48 @@
+default_profile = "waifu"
+
+[transition]
+type = "crossfade"
+duration_ms = 2000
+fps = 30
+
+[waifu.eDP-1]
+duration = 10
+path = "samples/wallpapers/waifu"
+run_command = "matugen image {image} -m dark"
+
+[waifu.eDP-1.transition]
+type = "sweep"
+duration_ms = 2000
+fps = 60
+
+[waifu.eDP-1.transition.sweep]
+direction = "left-to-right"
+
+[long.eDP-1]
+duration = 30
+path = "samples/wallpapers/waifu"
+run_command = "matugen image {image} -m dark"
+
+[long.eDP-1.transition]
+type = "crossfade"
+duration_ms = 2000
+
+[work.eDP-1]
+duration = 10
+path = "samples/wallpapers/normal"
+
+[waifu.HEADLESS-1]
+duration = 20
+path = "samples/wallpapers"
+
+[waifu.HEADLESS-2]
+duration = 20
+path = "samples/wallpapers"
+
+[waifu.WL-2]
+duration = 20
+path = "samples/wallpapers"
+
+[waifu.WL-3]
+duration = 10
+path = "samples/wallpapers"

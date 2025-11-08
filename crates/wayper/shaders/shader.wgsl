@@ -45,14 +45,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
         return mix(color1, color2, progress);
     } else if u_params.anim_type == 1u {
         // Sweep with soft edge
-        let sweep_dir = normalize(u_params.direction);
-        let coord = in.uv.x * abs(sweep_dir.x) + in.uv.y * abs(sweep_dir.y);
+        let sweep_dir = u_params.direction;
+
+        // Calculate position along sweep direction
+        let coord = dot(in.uv, sweep_dir);
+
+        // Normalize to [0, 1] range by dividing by the max possible coordinate
+        // Max coordinate is at corner [1, 1]
+        let max_coord = dot(vec2<f32>(1.0, 1.0), sweep_dir);
+        let normalized_coord = coord / max_coord;
 
         let edge_width = 0.05;
         // Map progress from [0, 1] to [-edge_width, 1 + edge_width]
         let sweep_position = u_params.progress * (1.0 + 2.0 * edge_width) - edge_width;
 
-        let blend_factor = smoothstep(sweep_position - edge_width, sweep_position + edge_width, coord);
+        let blend_factor = smoothstep(sweep_position - edge_width, sweep_position + edge_width, normalized_coord);
 
         return mix(color2, color1, blend_factor);
     }

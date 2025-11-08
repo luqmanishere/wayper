@@ -1,40 +1,99 @@
-default_profile = "waifu"
-transitions_enabled = true
-transition_duration = 2000
-transition_fps = 30
+default_profile = "crossfade"
 
-[waifu.eDP-1]
+# Global settings
+transitions_enabled = true
+
+# Global fallback transition config
+[transition]
+type = "crossfade"
+duration_ms = 2000
+fps = 60
+
+# Profile 1: Basic crossfade
+[crossfade.eDP-1]
 duration = 10
 path = "samples/wallpapers/waifu"
-run_command = "matugen image {image} -m dark"
-transition_fps = 60
-transition_type = "Sweep"
-sweep_direction = "LR"
-# transition_duration = 2000
-# run_command = "wal -n -i {image} -e --cols16"
 
-[long.eDP-1]
+[crossfade.eDP-1.transition]
+type = "crossfade"
+duration_ms = 2000
+fps = 60
+
+# Profile 2: Left-to-right sweep
+[sweep-lr.eDP-1]
+duration = 10
+path = "samples/wallpapers/waifu"
+
+[sweep-lr.eDP-1.transition]
+type = "sweep"
+duration_ms = 1500
+fps = 60
+
+[sweep-lr.eDP-1.transition.sweep]
+direction = "left-to-right"
+
+# Profile 3: Diagonal sweep
+[sweep-diagonal.eDP-1]
+duration = 10
+path = "samples/wallpapers/waifu"
+
+[sweep-diagonal.eDP-1.transition]
+type = "sweep"
+duration_ms = 2000
+fps = 60
+
+[sweep-diagonal.eDP-1.transition.sweep]
+direction = "top-left-to-bottom-right"
+edge_width = 0.08
+
+# Profile 4: Random transitions
+[random.eDP-1]
+duration = 10
+path = "samples/wallpapers/waifu"
+
+[random.eDP-1.transition]
+type = ["crossfade", "sweep"]
+duration_ms = 1500
+fps = 60
+
+[random.eDP-1.transition.sweep]
+direction = "right-to-left"
+
+# Profile 5: Fast sweep
+[fast.eDP-1]
+duration = 5
+path = "samples/wallpapers/waifu"
+
+[fast.eDP-1.transition]
+type = "sweep"
+duration_ms = 500
+fps = 60
+
+[fast.eDP-1.transition.sweep]
+direction = "bottom-to-top"
+edge_width = 0.03
+
+# Profile 6: Slow cinematic
+[slow.eDP-1]
 duration = 30
 path = "samples/wallpapers/waifu"
-run_command = "matugen image {image} -m dark"
-transition_type = "Crossfade"
 
-[work.eDP-1]
+[slow.eDP-1.transition]
+type = "crossfade"
+duration_ms = 4000
+fps = 24
+
+# Profile 7: No transitions (disabled)
+[no-transition.eDP-1]
 duration = 10
-path = "samples/wallpapers/normal"
+path = "samples/wallpapers/waifu"
+transitions_enabled = false
 
-[HEADLESS-1]
-duration = 20
-path = "samples/wallpapers"
+# Transition config exists but is disabled by the toggle above
+[no-transition.eDP-1.transition]
+type = "sweep"
+duration_ms = 2000
+fps = 60
 
-[HEADLESS-2]
-duration = 20
-path = "samples/wallpapers"
-
-[WL-2]
-duration = 20
-path = "samples/wallpapers"
-
-[WL-3]
-duration = 10
-path = "samples/wallpapers"
+[no-transition.eDP-1.transition.sweep]
+direction = "left-to-right"

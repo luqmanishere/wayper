@@ -12,9 +12,8 @@ pub struct Config {
     pub profiles: Profiles,
     pub reloaded: bool,
     pub path: Option<PathBuf>,
+    pub transition: Option<TransitionConfig>,
     pub transitions_enabled: Option<bool>,
-    pub transition_fps: Option<u16>,
-    pub transition_duration: Option<u32>,
 }
 
 impl Config {
@@ -95,16 +94,13 @@ impl Profiles {
 }
 
 /// Serializable output config
-#[derive(Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct OutputConfig {
     pub duration: Option<u64>,
     pub path: PathBuf,
     pub run_command: Option<String>,
+    pub transition: Option<TransitionConfig>,
     pub transitions_enabled: Option<bool>,
-    pub transition_fps: Option<u16>,
-    pub transition_type: Option<TransitionType>,
-    pub transition_duration: Option<u32>,
-    pub sweep_direction: Option<SweepDirection>,
 }
 
 impl OutputConfig {
@@ -118,39 +114,14 @@ impl OutputConfig {
         Ok(vecconf)
     }
 
+    pub fn get_transition_config<'a>(&'a self, global_config: &'a Config) -> Option<&'a TransitionConfig> {
+        self.transition.as_ref().or(global_config.transition.as_ref())
+    }
+
     pub fn is_transitions_enabled(&self, global_config: &Config) -> bool {
         self.transitions_enabled
             .or(global_config.transitions_enabled)
-            .unwrap_or(false)
-    }
-
-    pub fn get_transition_duration(&self, global_config: &Config) -> u32 {
-        self.transition_duration
-            .or(global_config.transition_duration)
-            .unwrap_or(2000)
-    }
-
-    pub fn get_transition_fps(&self, global_config: &Config) -> u16 {
-        self.transition_fps
-            .or(global_config.transition_fps)
-            .unwrap_or(30)
-    }
-
-    pub fn get_transition_type(&self) -> TransitionType {
-        self.transition_type.unwrap_or(TransitionType::Crossfade)
-    }
-
-    pub fn get_transition_direction(&self) -> [f32; 2] {
-        match self.get_transition_type() {
-            TransitionType::Crossfade => [0.0, 0.0],
-            TransitionType::Sweep => {
-                if let Some(sweep_dir) = self.sweep_direction {
-                    sweep_dir.as_direction()
-                } else {
-                    [0.0, 0.0]
-                }
-            }
-        }
+            .unwrap_or(true)
     }
 }
 
@@ -159,15 +130,14 @@ fn default_profile() -> String {
 }
 
 /// Serializable reader struct for output config
-#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Clone, Debug, PartialEq)]
 struct ConfigReader {
     #[serde(default = "default_profile")]
     default_profile: String,
+    pub transition: Option<TransitionConfig>,
+    pub transitions_enabled: Option<bool>,
     #[serde(flatten)]
     pub outputs: HashMap<String, ProfileReader>,
-    pub transitions_enabled: Option<bool>,
-    pub transition_fps: Option<u16>,
-    pub transition_duration: Option<u32>,
 }
 
 impl ConfigReader {
@@ -192,14 +162,13 @@ impl ConfigReader {
 
         config.profiles = profiles;
         config.default_profile = self.default_profile;
+        config.transition = self.transition;
         config.transitions_enabled = self.transitions_enabled;
-        config.transition_fps = self.transition_fps;
-        config.transition_duration = self.transition_duration;
     }
 }
 
 /// Serializable struct to support 2 different config forms
-#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Clone, Debug, PartialEq)]
 #[serde(untagged)]
 enum ProfileReader {
     Profile(HashMap<String, OutputConfig>),
@@ -211,40 +180,107 @@ impl Default for ProfileReader {
     }
 }
 
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct TransitionConfig {
+    #[serde(rename = "type")]
+    pub transition_type: TransitionSelection,
+
+    #[serde(default = "default_duration")]
+    pub duration_ms: u32,
+
+    #[serde(default = "default_fps")]
+    pub fps: u16,
+
+    #[serde(default)]
+    pub sweep: SweepConfig,
+}
+
+impl TransitionConfig {
+    pub fn pick_random_type(&self) -> TransitionTypeEnum {
+        use rand::seq::SliceRandom;
+        match &self.transition_type {
+            TransitionSelection::Single(t) => *t,
+            TransitionSelection::Random(types) => {
+                let mut rng = rand::thread_rng();
+                *types.choose(&mut rng).unwrap_or(&TransitionTypeEnum::Crossfade)
+            }
+        }
+    }
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum TransitionSelection {
+    Single(TransitionTypeEnum),
+    Random(Vec<TransitionTypeEnum>),
+}
+
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TransitionType {
+#[serde(rename_all = "lowercase")]
+pub enum TransitionTypeEnum {
     Crossfade,
     Sweep,
 }
 
-impl TransitionType {
-    /// Convert transition type to u32 for shader uniform
+impl TransitionTypeEnum {
     pub fn to_u32(&self) -> u32 {
         match self {
-            TransitionType::Crossfade => 0,
-            TransitionType::Sweep => 1,
+            TransitionTypeEnum::Crossfade => 0,
+            TransitionTypeEnum::Sweep => 1,
         }
     }
 }
 
-#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SweepDirection {
-    LR,
-    RL,
-    TB,
-    BT,
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct SweepConfig {
+    #[serde(default)]
+    pub direction: Direction,
+
+    #[serde(default = "default_edge_width")]
+    pub edge_width: f32,
 }
 
-impl SweepDirection {
-    pub fn as_direction(&self) -> [f32; 2] {
+impl Default for SweepConfig {
+    fn default() -> Self {
+        Self {
+            direction: Direction::default(),
+            edge_width: default_edge_width(),
+        }
+    }
+}
+
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum Direction {
+    #[default]
+    LeftToRight,
+    RightToLeft,
+    TopToBottom,
+    BottomToTop,
+    TopLeftToBottomRight,
+    TopRightToBottomLeft,
+    BottomLeftToTopRight,
+    BottomRightToTopLeft,
+}
+
+impl Direction {
+    pub fn as_vec2(&self) -> [f32; 2] {
         match self {
-            SweepDirection::LR => [1.0, 0.0],
-            SweepDirection::RL => [-1.0, 0.0],
-            SweepDirection::TB => [0.0, 1.0],
-            SweepDirection::BT => [1.0, 1.0],
+            Direction::LeftToRight => [1.0, 0.0],
+            Direction::RightToLeft => [-1.0, 0.0],
+            Direction::TopToBottom => [0.0, 1.0],
+            Direction::BottomToTop => [0.0, -1.0],
+            Direction::TopLeftToBottomRight => [1.0, 1.0],
+            Direction::TopRightToBottomLeft => [-1.0, 1.0],
+            Direction::BottomLeftToTopRight => [1.0, -1.0],
+            Direction::BottomRightToTopLeft => [-1.0, -1.0],
         }
     }
 }
+
+fn default_duration() -> u32 { 2000 }
+fn default_fps() -> u16 { 30 }
+fn default_edge_width() -> f32 { 0.05 }
 
 #[cfg(test)]
 mod tests {
@@ -253,12 +289,14 @@ mod tests {
     #[test]
     fn test_deserialize_config() {
         let conf_str = r#"
-            [eDP-1]
+            default_profile = "home"
+
+            [home.eDP-1]
             duration = 10
             path = "/home/user/wallpapers/personal"
             run_command = "matugen image {image}"
 
-            [HDMI-A-1]
+            [home.HDMI-A-1]
             duration = 20
             path = "/home/user/wallpapers"
 
@@ -275,17 +313,16 @@ mod tests {
         dbg!(&config_reader);
         let config = Config::new(conf_str).unwrap();
 
+        assert_eq!(config.default_profile, "home");
+
         assert_eq!(
-            config.get_output_config("default", "eDP-1").unwrap(),
+            config.get_output_config("home", "eDP-1").unwrap(),
             OutputConfig {
                 duration: Some(10),
                 path: "/home/user/wallpapers/personal".into(),
                 run_command: Some(String::from("matugen image {image}")),
+                transition: None,
                 transitions_enabled: None,
-                transition_fps: None,
-                transition_type: None,
-                transition_duration: None,
-                sweep_direction: None
             },
         );
         assert_eq!(
@@ -294,15 +331,81 @@ mod tests {
                 duration: Some(10),
                 path: "/home/user/wallpapers/work".into(),
                 run_command: None,
+                transition: None,
                 transitions_enabled: None,
-                transition_fps: None,
-                transition_type: None,
-                transition_duration: None,
-                sweep_direction: None
             }
         );
 
         let value: toml::Table = toml::from_str(conf_str).unwrap();
         dbg!(value);
+    }
+
+    #[test]
+    fn test_deserialize_transition_config() {
+        let conf_str = r#"
+            [transition]
+            type = "sweep"
+            duration_ms = 1500
+            fps = 60
+
+            [transition.sweep]
+            direction = "left-to-right"
+            edge_width = 0.08
+
+            [eDP-1]
+            duration = 10
+            path = "/home/user/wallpapers"
+
+            [eDP-1.transition]
+            type = "crossfade"
+            duration_ms = 2000
+
+            [HDMI-A-1]
+            duration = 20
+            path = "/home/user/wallpapers/hdmi"
+
+            [HDMI-A-1.transition]
+            type = ["crossfade", "sweep"]
+            duration_ms = 1000
+            fps = 30
+
+            [HDMI-A-1.transition.sweep]
+            direction = "top-left-to-bottom-right"
+        "#;
+
+        let config = Config::new(conf_str).unwrap();
+
+        let global_transition = config.transition.as_ref().unwrap();
+        assert_eq!(global_transition.duration_ms, 1500);
+        assert_eq!(global_transition.fps, 60);
+        assert_eq!(global_transition.sweep.edge_width, 0.08);
+        assert!(matches!(
+            global_transition.sweep.direction,
+            Direction::LeftToRight
+        ));
+
+        let edp_config = config.get_output_config("default", "eDP-1").unwrap();
+        let edp_transition = edp_config.transition.as_ref().unwrap();
+        assert_eq!(edp_transition.duration_ms, 2000);
+        assert!(matches!(
+            edp_transition.transition_type,
+            TransitionSelection::Single(TransitionTypeEnum::Crossfade)
+        ));
+
+        let hdmi_config = config.get_output_config("default", "HDMI-A-1").unwrap();
+        let hdmi_transition = hdmi_config.transition.as_ref().unwrap();
+        assert_eq!(hdmi_transition.duration_ms, 1000);
+        assert_eq!(hdmi_transition.fps, 30);
+        if let TransitionSelection::Random(types) = &hdmi_transition.transition_type {
+            assert_eq!(types.len(), 2);
+            assert!(matches!(types[0], TransitionTypeEnum::Crossfade));
+            assert!(matches!(types[1], TransitionTypeEnum::Sweep));
+        } else {
+            panic!("Expected Random transition type");
+        }
+        assert!(matches!(
+            hdmi_transition.sweep.direction,
+            Direction::TopLeftToBottomRight
+        ));
     }
 }

@@ -112,17 +112,24 @@ impl LayerShellHandler for Wayper {
                     }
 
                     let (duration_ms, target_fps, transition_type, transition_direction) =
-                        if output_config.is_transitions_enabled(&self.config) {
-                            let duration = output_config.get_transition_duration(&self.config);
-                            let fps = output_config.get_transition_fps(&self.config);
-                            let ttype = output_config.get_transition_type();
-                            let td = output_config.get_transition_direction();
-                            (duration, fps, ttype, td)
+                        if output_config.is_transitions_enabled(&self.config)
+                            && let Some(transition_cfg) = output_config.get_transition_config(&self.config)
+                        {
+                            let transition_type = transition_cfg.pick_random_type();
+                            let duration = transition_cfg.duration_ms;
+                            let fps = transition_cfg.fps;
+                            let td = match transition_type {
+                                wayper_lib::config::TransitionTypeEnum::Crossfade => [0.0, 0.0],
+                                wayper_lib::config::TransitionTypeEnum::Sweep => {
+                                    transition_cfg.sweep.direction.as_vec2()
+                                }
+                            };
+                            (duration, fps, transition_type, td)
                         } else {
                             (
                                 1,
                                 60,
-                                wayper_lib::config::TransitionType::Crossfade,
+                                wayper_lib::config::TransitionTypeEnum::Crossfade,
                                 [0.0, 0.0],
                             )
                         };
