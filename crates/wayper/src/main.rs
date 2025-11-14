@@ -31,6 +31,7 @@ use crate::{
 };
 
 mod map;
+mod metered_cache;
 mod output;
 // mod render_server;
 mod handlers;

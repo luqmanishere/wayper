@@ -12,11 +12,9 @@ use std::{
 
 use color_eyre::eyre::eyre;
 use image::GenericImageView;
-use lru::LruCache;
 use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
 };
-use smithay_client_toolkit::reexports::protocols_wlr::input_inhibitor::v1::client::zwlr_input_inhibitor_v1;
 use wgpu::{naga::FastHashMap, util::DeviceExt};
 
 /// RAII timer for GPU operations - logs elapsed time on drop
@@ -45,57 +43,6 @@ impl Drop for GpuOperationTimer {
     }
 }
 
-/// GPU performance metrics
-#[derive(Debug, Default)]
-pub struct GpuMetrics {
-    pub texture_cache_hits: AtomicU64,
-    pub texture_cache_misses: AtomicU64,
-    pub bind_group_cache_hits: AtomicU64,
-    pub bind_group_cache_misses: AtomicU64,
-    pub total_textures_loaded: AtomicU64,
-    pub total_frames_rendered: AtomicU64,
-}
-
-impl GpuMetrics {
-    fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn log_metrics(&self, texture_cache_size: usize, bind_group_cache_size: usize) {
-        let texture_hits = self.texture_cache_hits.load(Ordering::Relaxed);
-        let texture_misses = self.texture_cache_misses.load(Ordering::Relaxed);
-        let bind_group_hits = self.bind_group_cache_hits.load(Ordering::Relaxed);
-        let bind_group_misses = self.bind_group_cache_misses.load(Ordering::Relaxed);
-        let textures_loaded = self.total_textures_loaded.load(Ordering::Relaxed);
-        let frames_rendered = self.total_frames_rendered.load(Ordering::Relaxed);
-
-        let texture_hit_rate = if texture_hits + texture_misses > 0 {
-            (texture_hits as f64 / (texture_hits + texture_misses) as f64) * 100.0
-        } else {
-            0.0
-        };
-
-        let bind_group_hit_rate = if bind_group_hits + bind_group_misses > 0 {
-            (bind_group_hits as f64 / (bind_group_hits + bind_group_misses) as f64) * 100.0
-        } else {
-            0.0
-        };
-
-        tracing::info!(
-            texture_cache_size = texture_cache_size,
-            texture_cache_hits = texture_hits,
-            texture_cache_misses = texture_misses,
-            texture_hit_rate = format!("{:.1}%", texture_hit_rate),
-            bind_group_cache_size = bind_group_cache_size,
-            bind_group_cache_hits = bind_group_hits,
-            bind_group_cache_misses = bind_group_misses,
-            bind_group_hit_rate = format!("{:.1}%", bind_group_hit_rate),
-            total_textures_loaded = textures_loaded,
-            total_frames_rendered = frames_rendered,
-            "GPU cache metrics"
-        );
-    }
-}
 
 pub struct WgpuRenderer {
     instance: wgpu::Instance,
@@ -110,15 +57,15 @@ pub struct WgpuRenderer {
     pub sampler: Option<wgpu::Sampler>,
     pub transition_params_buf: Option<wgpu::Buffer>,
     /// Texture management - cache textures by image path + size
-    pub texture_cache: LruCache<String, wgpu::Texture>,
-    pub bind_group_cache: LruCache<String, wgpu::BindGroup>,
+    pub texture_cache: crate::metered_cache::MeteredCache<String, wgpu::Texture>,
+    pub bind_group_cache: crate::metered_cache::MeteredCache<String, wgpu::BindGroup>,
     pub surface_configs: FastHashMap<String, wgpu::SurfaceConfiguration>,
 
     texture_loader_tx: Sender<TextureLoadRequest>,
     texture_loader_rx: Receiver<TextureLoadResult>,
 
-    /// Performance metrics
-    pub metrics: GpuMetrics,
+    /// Total frames rendered for metrics
+    pub total_frames_rendered: AtomicU64,
     // TODO: proper keys
 }
 
@@ -149,12 +96,16 @@ impl WgpuRenderer {
             index_buffer: None,
             sampler: None,
             transition_params_buf: None,
-            texture_cache: LruCache::new(std::num::NonZero::new(10).expect("non-zero")),
-            bind_group_cache: LruCache::new(std::num::NonZeroUsize::new(20).expect("non-zero")),
+            texture_cache: crate::metered_cache::MeteredCache::new(
+                std::num::NonZeroUsize::new(10).expect("non-zero"),
+            ),
+            bind_group_cache: crate::metered_cache::MeteredCache::new(
+                std::num::NonZeroUsize::new(20).expect("non-zero"),
+            ),
             surface_configs: Default::default(),
             texture_loader_tx: load_tx,
             texture_loader_rx: result_rx,
-            metrics: GpuMetrics::new(),
+            total_frames_rendered: AtomicU64::new(0),
         }
     }
 }
@@ -232,8 +183,9 @@ impl WgpuRenderer {
                 texture_size,
             );
 
+            let size_bytes = Self::texture_size_bytes(result.dimensions.0, result.dimensions.1);
             self.texture_cache
-                .get_or_insert(result.cache_key.clone(), || texture);
+                .get_or_insert(result.cache_key.clone(), size_bytes, || texture);
             count += 1;
         }
 
@@ -531,6 +483,11 @@ impl WgpuRenderer {
         format!("__dummy_black__@{}x{}", target_size.0, target_size.1)
     }
 
+    /// Calculate memory size of a texture in bytes (RGBA8 = 4 bytes per pixel)
+    fn texture_size_bytes(width: u32, height: u32) -> u64 {
+        (width as u64) * (height as u64) * 4
+    }
+
     /// Get or create a black dummy texture of the specified size
     pub fn get_or_create_dummy_texture(
         &mut self,
@@ -589,9 +546,10 @@ impl WgpuRenderer {
             texture_size,
         );
 
-        // Cache the texture
+        // Cache the texture with size tracking
+        let size_bytes = Self::texture_size_bytes(target_size.0, target_size.1);
         self.texture_cache
-            .get_or_insert(cache_key.clone(), || texture);
+            .get_or_insert(cache_key.clone(), size_bytes, || texture);
         Ok(cache_key)
     }
 
@@ -616,16 +574,10 @@ impl WgpuRenderer {
 
         // Check if texture is already cached
         if self.texture_cache.contains(&cache_key) {
-            self.metrics
-                .texture_cache_hits
-                .fetch_add(1, Ordering::Relaxed);
             tracing::trace!("Texture cache hit");
             return Ok(self.texture_cache.get(&cache_key).unwrap());
         }
 
-        self.metrics
-            .texture_cache_misses
-            .fetch_add(1, Ordering::Relaxed);
         tracing::trace!("Texture cache miss - loading from disk");
 
         // Load and resize the image
@@ -671,13 +623,11 @@ impl WgpuRenderer {
             texture_size,
         );
 
-        // Cache the texture
-        self.texture_cache
-            .get_or_insert(cache_key.clone(), || texture);
-        self.metrics
-            .total_textures_loaded
-            .fetch_add(1, Ordering::Relaxed);
-        Ok(self.texture_cache.get(&cache_key).unwrap())
+        // Cache the texture with size tracking
+        let size_bytes = Self::texture_size_bytes(img_width, img_height);
+        Ok(self
+            .texture_cache
+            .get_or_insert(cache_key, size_bytes, || texture))
     }
 
     /// Get or create a bind group for two textures
@@ -691,16 +641,10 @@ impl WgpuRenderer {
 
         // Check if bind group is already cached
         if self.bind_group_cache.contains(&bind_group_key) {
-            self.metrics
-                .bind_group_cache_hits
-                .fetch_add(1, Ordering::Relaxed);
             tracing::trace!("Bind group cache hit");
             return Ok(bind_group_key);
         }
 
-        self.metrics
-            .bind_group_cache_misses
-            .fetch_add(1, Ordering::Relaxed);
         tracing::trace!("Bind group cache miss - creating new");
 
         let device = self
@@ -716,14 +660,20 @@ impl WgpuRenderer {
             .as_ref()
             .ok_or_else(|| color_eyre::eyre::eyre!("Sampler not initialized"))?;
         // Use peek() to avoid mutable borrow issues when accessing multiple cache entries
-        let texture1 = self.texture_cache.peek(cache_key1).ok_or_else(|| {
-            color_eyre::eyre::eyre!("Texture 1 not found in cache: {}", cache_key1)
-        })?;
+        let texture1 = self
+            .texture_cache
+            .peek(&cache_key1.to_string())
+            .ok_or_else(|| {
+                color_eyre::eyre::eyre!("Texture 1 not found in cache: {}", cache_key1)
+            })?;
         let texture_view1 = texture1.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let texture2 = self.texture_cache.peek(cache_key2).ok_or_else(|| {
-            color_eyre::eyre::eyre!("Texture 2 not found in cache: {}", cache_key2)
-        })?;
+        let texture2 = self
+            .texture_cache
+            .peek(&cache_key2.to_string())
+            .ok_or_else(|| {
+                color_eyre::eyre::eyre!("Texture 2 not found in cache: {}", cache_key2)
+            })?;
         let texture_view2 = texture2.create_view(&wgpu::TextureViewDescriptor::default());
 
         let transition_params = self
@@ -757,9 +707,10 @@ impl WgpuRenderer {
             label: Some("Image Bind Group"),
         });
 
-        // Cache the bind group
+        // Cache the bind group (conservative estimate of 256 bytes per bind group)
+        const BIND_GROUP_SIZE_BYTES: u64 = 256;
         self.bind_group_cache
-            .get_or_insert(bind_group_key.clone(), || bind_group);
+            .get_or_insert(bind_group_key.clone(), BIND_GROUP_SIZE_BYTES, || bind_group);
         Ok(bind_group_key)
     }
 
@@ -791,6 +742,31 @@ impl WgpuRenderer {
             bytemuck::bytes_of(&transition_params),
         );
         Ok(())
+    }
+
+    /// Log cache metrics for monitoring and debugging
+    pub fn log_cache_metrics(&self) {
+        let tex_metrics = self.texture_cache.metrics();
+        let bg_metrics = self.bind_group_cache.metrics();
+        let frames = self.total_frames_rendered.load(Ordering::Relaxed);
+
+        tracing::info!(
+            texture_cache_size = tex_metrics.size,
+            texture_cache_hits = tex_metrics.hits,
+            texture_cache_misses = tex_metrics.misses,
+            texture_hit_rate = format!("{:.1}%", tex_metrics.hit_rate()),
+            texture_cache_mb = format!("{:.2}", tex_metrics.bytes_mb()),
+            texture_evictions = tex_metrics.evictions,
+            bind_group_cache_size = bg_metrics.size,
+            bind_group_cache_hits = bg_metrics.hits,
+            bind_group_cache_misses = bg_metrics.misses,
+            bind_group_hit_rate = format!("{:.1}%", bg_metrics.hit_rate()),
+            bind_group_cache_mb = format!("{:.2}", bg_metrics.bytes_mb()),
+            bind_group_evictions = bg_metrics.evictions,
+            total_textures_loaded = self.texture_cache.total_inserted(),
+            total_frames_rendered = frames,
+            "GPU cache metrics"
+        );
     }
 
     /// Configure surface for a specific output
@@ -957,32 +933,26 @@ impl WgpuRenderer {
         surface_texture.present();
         drop(_present_timer);
 
-        self.metrics
-            .total_frames_rendered
+        self.total_frames_rendered
             .fetch_add(1, Ordering::Relaxed);
 
         Ok(())
     }
 
-    /// Log GPU performance metrics
-    pub fn log_gpu_metrics(&self) {
-        self.metrics
-            .log_metrics(self.texture_cache.len(), self.bind_group_cache.len());
-    }
-
     /// Get GPU metrics data for socket response
     pub fn get_metrics_data(&self) -> wayper_lib::socket::GpuMetricsData {
-        use std::sync::atomic::Ordering;
+        let tex_metrics = self.texture_cache.metrics();
+        let bg_metrics = self.bind_group_cache.metrics();
 
         wayper_lib::socket::GpuMetricsData {
-            texture_cache_size: self.texture_cache.len(),
-            texture_cache_hits: self.metrics.texture_cache_hits.load(Ordering::Relaxed),
-            texture_cache_misses: self.metrics.texture_cache_misses.load(Ordering::Relaxed),
-            bind_group_cache_size: self.bind_group_cache.len(),
-            bind_group_cache_hits: self.metrics.bind_group_cache_hits.load(Ordering::Relaxed),
-            bind_group_cache_misses: self.metrics.bind_group_cache_misses.load(Ordering::Relaxed),
-            total_textures_loaded: self.metrics.total_textures_loaded.load(Ordering::Relaxed),
-            total_frames_rendered: self.metrics.total_frames_rendered.load(Ordering::Relaxed),
+            texture_cache_size: tex_metrics.size,
+            texture_cache_hits: tex_metrics.hits,
+            texture_cache_misses: tex_metrics.misses,
+            bind_group_cache_size: bg_metrics.size,
+            bind_group_cache_hits: bg_metrics.hits,
+            bind_group_cache_misses: bg_metrics.misses,
+            total_textures_loaded: self.texture_cache.total_inserted(),
+            total_frames_rendered: self.total_frames_rendered.load(Ordering::Relaxed),
         }
     }
 }

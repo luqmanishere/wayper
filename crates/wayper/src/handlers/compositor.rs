@@ -127,7 +127,7 @@ impl CompositorHandler for Wayper {
                     // Log GPU metrics every 100 frames
                     if output_handle.frame_count % 100 == 0 {
                         drop(output_handle);
-                        self.wgpu.log_gpu_metrics();
+                        self.wgpu.log_cache_metrics();
                         output_handle = output.lock().unwrap();
                     }
 
@@ -230,7 +230,7 @@ impl CompositorHandler for Wayper {
                     // Log GPU metrics every 100 frames
                     if output_handle.frame_count % 100 == 0 {
                         drop(output_handle);
-                        self.wgpu.log_gpu_metrics();
+                        self.wgpu.log_cache_metrics();
                         output_handle = output.lock().unwrap();
                     }
                 }
