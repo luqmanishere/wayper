@@ -17,6 +17,7 @@ color-eyre.workspace = true
 dashmap = { version = "7.0.0-rc2" }
 image.workspace = true
 indexmap = { version = "2" }
+lru = { version = "0.16" }
 mime_guess = "2"
 pollster = { version = "0.4.0" }
 rand = "0.9"

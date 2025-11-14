@@ -12,9 +12,11 @@ use std::{
 
 use color_eyre::eyre::eyre;
 use image::GenericImageView;
+use lru::LruCache;
 use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
 };
+use smithay_client_toolkit::reexports::protocols_wlr::input_inhibitor::v1::client::zwlr_input_inhibitor_v1;
 use wgpu::{naga::FastHashMap, util::DeviceExt};
 
 /// RAII timer for GPU operations - logs elapsed time on drop
@@ -108,8 +110,8 @@ pub struct WgpuRenderer {
     pub sampler: Option<wgpu::Sampler>,
     pub transition_params_buf: Option<wgpu::Buffer>,
     /// Texture management - cache textures by image path + size
-    pub texture_cache: FastHashMap<String, wgpu::Texture>,
-    pub bind_group_cache: FastHashMap<String, wgpu::BindGroup>,
+    pub texture_cache: LruCache<String, wgpu::Texture>,
+    pub bind_group_cache: LruCache<String, wgpu::BindGroup>,
     pub surface_configs: FastHashMap<String, wgpu::SurfaceConfiguration>,
 
     texture_loader_tx: Sender<TextureLoadRequest>,
@@ -147,8 +149,8 @@ impl WgpuRenderer {
             index_buffer: None,
             sampler: None,
             transition_params_buf: None,
-            texture_cache: Default::default(),
-            bind_group_cache: Default::default(),
+            texture_cache: LruCache::new(std::num::NonZero::new(10).expect("non-zero")),
+            bind_group_cache: LruCache::new(std::num::NonZeroUsize::new(20).expect("non-zero")),
             surface_configs: Default::default(),
             texture_loader_tx: load_tx,
             texture_loader_rx: result_rx,
@@ -166,7 +168,7 @@ impl WgpuRenderer {
     ) -> color_eyre::Result<()> {
         let cache_key = Self::cache_key(image_path, target_size);
 
-        if self.texture_cache.contains_key(&cache_key) {
+        if self.texture_cache.contains(&cache_key) {
             return Ok(());
         }
 
@@ -193,7 +195,7 @@ impl WgpuRenderer {
         let mut count = 0;
 
         while let Ok(result) = self.texture_loader_rx.try_recv() {
-            if self.texture_cache.contains_key(&result.cache_key) {
+            if self.texture_cache.contains(&result.cache_key) {
                 continue;
             }
 
@@ -230,7 +232,8 @@ impl WgpuRenderer {
                 texture_size,
             );
 
-            self.texture_cache.insert(result.cache_key.clone(), texture);
+            self.texture_cache
+                .get_or_insert(result.cache_key.clone(), || texture);
             count += 1;
         }
 
@@ -536,7 +539,7 @@ impl WgpuRenderer {
         let cache_key = Self::dummy_texture_key(target_size);
 
         // Check if dummy texture is already cached
-        if self.texture_cache.contains_key(&cache_key) {
+        if self.texture_cache.contains(&cache_key) {
             return Ok(cache_key);
         }
 
@@ -587,7 +590,8 @@ impl WgpuRenderer {
         );
 
         // Cache the texture
-        self.texture_cache.insert(cache_key.clone(), texture);
+        self.texture_cache
+            .get_or_insert(cache_key.clone(), || texture);
         Ok(cache_key)
     }
 
@@ -611,7 +615,7 @@ impl WgpuRenderer {
         let cache_key = Self::cache_key(image_path, target_size);
 
         // Check if texture is already cached
-        if self.texture_cache.contains_key(&cache_key) {
+        if self.texture_cache.contains(&cache_key) {
             self.metrics
                 .texture_cache_hits
                 .fetch_add(1, Ordering::Relaxed);
@@ -668,7 +672,8 @@ impl WgpuRenderer {
         );
 
         // Cache the texture
-        self.texture_cache.insert(cache_key.clone(), texture);
+        self.texture_cache
+            .get_or_insert(cache_key.clone(), || texture);
         self.metrics
             .total_textures_loaded
             .fetch_add(1, Ordering::Relaxed);
@@ -685,7 +690,7 @@ impl WgpuRenderer {
         let bind_group_key = format!("{}+{}", cache_key1, cache_key2);
 
         // Check if bind group is already cached
-        if self.bind_group_cache.contains_key(&bind_group_key) {
+        if self.bind_group_cache.contains(&bind_group_key) {
             self.metrics
                 .bind_group_cache_hits
                 .fetch_add(1, Ordering::Relaxed);
@@ -710,20 +715,22 @@ impl WgpuRenderer {
             .sampler
             .as_ref()
             .ok_or_else(|| color_eyre::eyre::eyre!("Sampler not initialized"))?;
-        let texture1 = self.texture_cache.get(cache_key1).ok_or_else(|| {
+        // Use peek() to avoid mutable borrow issues when accessing multiple cache entries
+        let texture1 = self.texture_cache.peek(cache_key1).ok_or_else(|| {
             color_eyre::eyre::eyre!("Texture 1 not found in cache: {}", cache_key1)
         })?;
-        let texture2 = self.texture_cache.get(cache_key2).ok_or_else(|| {
+        let texture_view1 = texture1.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let texture2 = self.texture_cache.peek(cache_key2).ok_or_else(|| {
             color_eyre::eyre::eyre!("Texture 2 not found in cache: {}", cache_key2)
         })?;
+        let texture_view2 = texture2.create_view(&wgpu::TextureViewDescriptor::default());
+
         let transition_params = self
             .transition_params_buf
             .as_ref()
             .expect("buffer initialized")
             .as_entire_buffer_binding();
-
-        let texture_view1 = texture1.create_view(&wgpu::TextureViewDescriptor::default());
-        let texture_view2 = texture2.create_view(&wgpu::TextureViewDescriptor::default());
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: bind_group_layout,
@@ -752,7 +759,7 @@ impl WgpuRenderer {
 
         // Cache the bind group
         self.bind_group_cache
-            .insert(bind_group_key.clone(), bind_group);
+            .get_or_insert(bind_group_key.clone(), || bind_group);
         Ok(bind_group_key)
     }
 
