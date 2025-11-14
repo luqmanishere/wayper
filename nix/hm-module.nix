@@ -66,35 +66,32 @@ self: {
   };
 
   # Generate transition block TOML
-  generateTransitionBlock = indent: transition: let
+  # prefix is like "transition" or "profile.output.transition"
+  generateTransitionBlock = prefix: transition: let
     typeStr =
       if transition.type != null
-      then "${indent}type = ${transitionTypeToToml transition.type}\n"
+      then "type = ${transitionTypeToToml transition.type}\n"
       else "";
     durationStr =
       if transition.duration_ms != null
-      then "${indent}duration_ms = ${toString transition.duration_ms}\n"
+      then "duration_ms = ${toString transition.duration_ms}\n"
       else "";
     fpsStr =
       if transition.fps != null
-      then "${indent}fps = ${toString transition.fps}\n"
+      then "fps = ${toString transition.fps}\n"
       else "";
     sweepStr =
       if transition.sweep.direction != null || transition.sweep.edge_width != null
       then let
         dirStr =
           if transition.sweep.direction != null
-          then "${indent}  direction = \"${transition.sweep.direction}\"\n"
+          then "  direction = \"${transition.sweep.direction}\"\n"
           else "";
         edgeStr =
           if transition.sweep.edge_width != null
-          then "${indent}  edge_width = ${toString transition.sweep.edge_width}\n"
+          then "  edge_width = ${toString transition.sweep.edge_width}\n"
           else "";
-      in "${indent}[${
-        if indent == ""
-        then "transition.sweep"
-        else builtins.substring 0 ((builtins.stringLength indent) - 1) "${indent}transition.sweep"
-      }]\n${dirStr}${edgeStr}"
+      in "\n[${prefix}.sweep]\n${dirStr}${edgeStr}"
       else "";
   in "${typeStr}${durationStr}${fpsStr}${sweepStr}";
 in {
@@ -190,7 +187,7 @@ in {
               || cfg.config.transition.sweep.edge_width != null;
           in
             if hasGlobalTransition
-            then "[transition]\n${generateTransitionBlock "" cfg.config.transition}"
+            then "[transition]\n${generateTransitionBlock "transition" cfg.config.transition}"
             else ""
         }
         ${builtins.concatStringsSep "\n" (map (monitor: let
@@ -203,7 +200,7 @@ in {
               || monitor.transition.sweep.edge_width != null;
             transitionBlock =
               if hasMonitorTransition
-              then "\n[${monitor.profile}.${monitor.name}.transition]\n${generateTransitionBlock "" monitor.transition}"
+              then "\n[${monitor.profile}.${monitor.name}.transition]\n${generateTransitionBlock "${monitor.profile}.${monitor.name}.transition" monitor.transition}"
               else "";
           in ''
             [${monitor.profile}.${monitor.name}]
