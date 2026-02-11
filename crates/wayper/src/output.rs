@@ -83,6 +83,10 @@ impl OutputRepr {
     /// Get the next index, but does not modify the original index. Accounts
     /// for the length of the image vec
     fn get_next_index(&self) -> usize {
+        if self.img_list.is_empty() {
+            tracing::warn!("no images configured for {}", self.output_name);
+            return 0;
+        }
         let mut index = self.index;
 
         // the first render should use the first entry

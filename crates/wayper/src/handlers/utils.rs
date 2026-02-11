@@ -42,7 +42,9 @@ pub fn get_img_list(
     output_config: Option<&wayper_lib::config::OutputConfig>,
 ) -> Vec<std::path::PathBuf> {
     if let Some(output_config) = output_config {
-        if output_config.path.is_dir() {
+        if output_config.path.is_file() {
+            vec![output_config.path.clone()]
+        } else if output_config.path.is_dir() {
             let mut files = WalkDir::new(&output_config.path)
                 .into_iter()
                 .filter(|e| {

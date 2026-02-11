@@ -5,7 +5,7 @@
 use std::sync::{Arc, Mutex, RwLock};
 
 use dashmap::DashMap;
-use smithay_client_toolkit::reexports::client::backend::ObjectId;
+use smithay_client_toolkit::reexports::client::{Proxy, backend::ObjectId};
 
 use super::output::OutputRepr;
 
@@ -72,16 +72,23 @@ impl OutputMap {
 
     pub fn remove(&mut self, key: OutputKey) -> Arc<Mutex<OutputRepr>> {
         let idx = self.get_idx(key).expect("valid index returned");
+        let removed = self.output_vec.write().unwrap().remove(idx);
 
-        // TODO: the map keys need to be fixed
-        for mut v in self.output_name_map.iter_mut() {
-            let v = v.value_mut();
-            // if the index is larger, removal of a smaller value will shift it to the left
-            if *v > idx {
-                *v -= 1;
+        // Rebuild all index maps to avoid stale indices after vec removal.
+        self.output_name_map.clear();
+        self.surface_id_map.clear();
+        self.output_id_map.clear();
+
+        for (i, output) in self.output_vec.read().unwrap().iter().enumerate() {
+            let output = output.lock().unwrap();
+            self.output_name_map.insert(output.output_name.clone(), i);
+            if let Some(surface) = output._surface.as_ref() {
+                self.surface_id_map.insert(surface.id(), i);
             }
+            self.output_id_map.insert(output._wl_repr.id(), i);
         }
-        self.output_vec.write().unwrap().remove(idx)
+
+        removed
     }
 
     /// Check if the relevant maps if the key exists

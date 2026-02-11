@@ -77,6 +77,13 @@ impl LayerShellHandler for Wayper {
 
                     let img_list_len = output_guard.img_list.len();
                     let current_index = output_guard.index;
+                    if img_list_len == 0 {
+                        warn!(
+                            "no images found for output {}, skipping initial render",
+                            output_guard.output_name
+                        );
+                        return;
+                    }
 
                     if let Some(current_img) = output_guard.img_list.get(current_index)
                         && let Err(e) = self.wgpu.request_texture_load(
