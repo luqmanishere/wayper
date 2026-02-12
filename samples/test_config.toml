@@ -1,5 +1,4 @@
 default_profile = "crossfade"
-
 # Global settings
 transitions_enabled = true
 

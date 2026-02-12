@@ -30,7 +30,7 @@ impl CompositorHandler for Wayper {
     fn frame(
         &mut self,
         _conn: &client::Connection,
-        _qh: &client::QueueHandle<Self>,
+        qh: &client::QueueHandle<Self>,
         surface: &client::protocol::wl_surface::WlSurface,
         time: u32,
     ) {
@@ -60,7 +60,7 @@ impl CompositorHandler for Wayper {
                 // rip any compositors that can't handle this
                 if !transition.should_render_frame() {
                     trace!("Frame skipped - FPS throttle");
-                    surface.frame(_qh, surface.clone());
+                    surface.frame(qh, surface.clone());
                     surface.commit();
                     return;
                 }
@@ -135,9 +135,6 @@ impl CompositorHandler for Wayper {
                         output_handle.first_configure = false;
                     }
                 }
-
-                surface.frame(_qh, surface.clone());
-                surface.commit();
             } else if output_handle.should_next {
                 let last_render = output_handle.last_render_instant.elapsed();
                 let output_age = output_handle.created_at.elapsed();
@@ -199,8 +196,6 @@ impl CompositorHandler for Wayper {
                         "Starting {} transition for {} (duration: {}ms, {} FPS)",
                         transition_name, output_handle.output_name, duration_ms, target_fps
                     );
-
-                    surface.frame(_qh, surface.clone());
                 } else {
                     let current_index = output_handle.index;
                     let output_name = output_handle.output_name.clone();
@@ -254,12 +249,9 @@ impl CompositorHandler for Wayper {
                     let img_path = image.clone();
                     std::thread::spawn(|| utils::run_command(command, img_path));
                 }
-
-                surface.commit();
-            } else {
-                surface.frame(_qh, surface.clone());
-                surface.commit();
             }
+            surface.frame(qh, surface.clone());
+            surface.commit();
         } else {
             error!("no output configured for surface {surface_id}");
         }
