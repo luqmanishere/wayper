@@ -15,6 +15,7 @@ use image::GenericImageView;
 use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
 };
+use wayper_lib::socket::GpuMetricsData;
 use wgpu::{naga::FastHashMap, util::DeviceExt};
 
 /// RAII timer for GPU operations - logs elapsed time on drop
@@ -43,7 +44,6 @@ impl Drop for GpuOperationTimer {
     }
 }
 
-
 pub struct WgpuRenderer {
     instance: wgpu::Instance,
     pub adapter: Option<wgpu::Adapter>,
@@ -70,7 +70,7 @@ pub struct WgpuRenderer {
 }
 
 impl WgpuRenderer {
-    pub fn new() -> Self {
+    pub fn new() -> (Sender<RenderCommand>, wgpu::Instance) {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             // TODO: support for other platforms via winit for debugging
             backends: wgpu::Backends::all(),
@@ -80,37 +80,123 @@ impl WgpuRenderer {
         let (load_tx, load_rx) = std::sync::mpsc::channel();
         let (result_tx, result_rx) = std::sync::mpsc::channel();
 
+        let (command_tx, command_rx) = std::sync::mpsc::channel();
+
         std::thread::spawn(move || {
             texture_loader_worker(load_rx, result_tx);
         });
 
-        Self {
-            instance,
-            adapter: None,
-            device: None,
-            queue: None,
-            map: Default::default(),
-            image_pipeline: None,
-            bind_group_layout: None,
-            vertex_buffer: None,
-            index_buffer: None,
-            sampler: None,
-            transition_params_buf: None,
-            texture_cache: crate::metered_cache::MeteredCache::new(
-                std::num::NonZeroUsize::new(10).expect("non-zero"),
-            ),
-            bind_group_cache: crate::metered_cache::MeteredCache::new(
-                std::num::NonZeroUsize::new(20).expect("non-zero"),
-            ),
-            surface_configs: Default::default(),
-            texture_loader_tx: load_tx,
-            texture_loader_rx: result_rx,
-            total_frames_rendered: AtomicU64::new(0),
+        let instance1 = instance.clone();
+        std::thread::spawn(move || {
+            let mut renderer = Self {
+                instance: instance1,
+                adapter: None,
+                device: None,
+                queue: None,
+                map: Default::default(),
+                image_pipeline: None,
+                bind_group_layout: None,
+                vertex_buffer: None,
+                index_buffer: None,
+                sampler: None,
+                transition_params_buf: None,
+                texture_cache: crate::metered_cache::MeteredCache::new(
+                    std::num::NonZeroUsize::new(10).expect("non-zero"),
+                ),
+                bind_group_cache: crate::metered_cache::MeteredCache::new(
+                    std::num::NonZeroUsize::new(20).expect("non-zero"),
+                ),
+                surface_configs: Default::default(),
+                texture_loader_tx: load_tx,
+                texture_loader_rx: result_rx,
+                total_frames_rendered: AtomicU64::new(0),
+            };
+
+            renderer.worker(command_rx);
+        });
+
+        (command_tx, instance)
+    }
+
+    fn worker(&mut self, command_rx: Receiver<RenderCommand>) {
+        while let Ok(command) = command_rx.recv() {
+            let command_name = command.to_string();
+            let process_start = Instant::now();
+            if let Ok(count) = self.process_loaded_textures()
+                && count > 0
+            {
+                let process_time = process_start.elapsed();
+                tracing::debug!(
+                    count = count,
+                    time_us = process_time.as_micros(),
+                    "Processed pre-loaded textures"
+                );
+            }
+
+            // TODO: error handling
+            match self.handle_command(command) {
+                Ok(_) => {
+                    // TODO: logging
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Error encountered while processing command {command_name}: {e}",
+                    )
+                }
+            };
         }
+    }
+
+    fn handle_command(&mut self, command: RenderCommand) -> color_eyre::Result<()> {
+        match command {
+            RenderCommand::NewSurface {
+                output_name,
+                surface,
+            } => {
+                self.new_surface(output_name, surface)?;
+            }
+            RenderCommand::ConfigureSurface { output_name, size } => {
+                self.configure_surface(&output_name, size)?;
+            }
+            RenderCommand::RequestTextureLoad {
+                image_path,
+                target_size,
+                output_name,
+            } => {
+                self.request_texture_load(image_path.as_path(), target_size, output_name)?;
+            }
+            RenderCommand::RenderFrame {
+                output_name,
+                previous_image,
+                current_image,
+                progress,
+                transition_type,
+                direction,
+            } => {
+                self.render_frame(
+                    &output_name,
+                    previous_image.as_deref(),
+                    current_image.as_path(),
+                    progress,
+                    transition_type,
+                    direction,
+                )?;
+            }
+            RenderCommand::LogCacheMetrics => {
+                self.log_cache_metrics();
+            }
+            RenderCommand::GetMetricsData { reply } => {
+                reply.send(self.get_metrics_data())?;
+            }
+        }
+
+        Ok(())
     }
 }
 
 impl WgpuRenderer {
+    /// Load an image texture from a specified path for a a target size. NoOp if the texture is already cached,
+    /// otherwise the image is loaded and resized to the target size.
     pub fn request_texture_load(
         &mut self,
         image_path: &Path,
@@ -132,6 +218,7 @@ impl WgpuRenderer {
         Ok(())
     }
 
+    /// Process loaded textures returned by the texture loader
     #[tracing::instrument(skip(self))]
     pub fn process_loaded_textures(&mut self) -> color_eyre::Result<usize> {
         let device = self
@@ -193,6 +280,7 @@ impl WgpuRenderer {
     }
 }
 
+/// Texture loader worker ran in a seperate thread. Results are pushed to the results channel
 fn texture_loader_worker(
     load_rx: Receiver<TextureLoadRequest>,
     result_tx: Sender<TextureLoadResult>,
@@ -236,6 +324,7 @@ fn texture_loader_worker(
     }
 }
 
+/// Load an image from a path and resize it to a target size
 fn load_resize_image(
     image_path: &Path,
     target_size: (u32, u32),
@@ -251,26 +340,12 @@ fn load_resize_image(
 }
 
 impl WgpuRenderer {
+    /// Add a new surface to the renderer cache
     pub fn new_surface(
         &mut self,
         output_name: String,
-        display: *mut wayland_sys::client::wl_display,
-        surfac: *mut wayland_sys::client::wl_proxy,
+        surface: wgpu::Surface<'static>,
     ) -> color_eyre::Result<()> {
-        let raw_display_handle = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(
-            NonNull::new(display as *mut _).unwrap(),
-        ));
-        let raw_window_handle = RawWindowHandle::Wayland(WaylandWindowHandle::new(
-            NonNull::new(surfac as *mut _).unwrap(),
-        ));
-
-        let surface = unsafe {
-            self.instance
-                .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
-                    raw_display_handle,
-                    raw_window_handle,
-                })
-        }?;
         if self.adapter.is_none() {
             let adapter = pollster::block_on(self.instance.request_adapter(
                 &wgpu::RequestAdapterOptionsBase {
@@ -288,6 +363,7 @@ impl WgpuRenderer {
         Ok(())
     }
 
+    /// Build and initialize the image pipeline
     #[tracing::instrument(skip(self), fields(format = ?surface_format))]
     pub fn init_image_pipeline(
         &mut self,
@@ -805,6 +881,7 @@ impl WgpuRenderer {
 
         surface.configure(device, &config);
         self.surface_configs.insert(output_name.to_string(), config);
+        self.init_image_pipeline(surface_format)?;
 
         Ok(surface_format)
     }
@@ -933,8 +1010,7 @@ impl WgpuRenderer {
         surface_texture.present();
         drop(_present_timer);
 
-        self.total_frames_rendered
-            .fetch_add(1, Ordering::Relaxed);
+        self.total_frames_rendered.fetch_add(1, Ordering::Relaxed);
 
         Ok(())
     }
@@ -975,4 +1051,56 @@ struct TextureLoadResult {
     cache_key: String,
     image_data: image::RgbaImage,
     dimensions: (u32, u32),
+}
+
+#[derive(strum::Display)]
+pub enum RenderCommand {
+    NewSurface {
+        output_name: String,
+        surface: wgpu::Surface<'static>,
+    },
+
+    ConfigureSurface {
+        output_name: String,
+        size: (u32, u32),
+    },
+
+    RequestTextureLoad {
+        image_path: PathBuf,
+        target_size: (u32, u32),
+        output_name: String,
+    },
+
+    RenderFrame {
+        output_name: String,
+        previous_image: Option<PathBuf>,
+        current_image: PathBuf,
+        progress: f32,
+        transition_type: u32,
+        direction: Option<[f32; 2]>,
+    },
+    LogCacheMetrics,
+    GetMetricsData {
+        reply: oneshot::Sender<GpuMetricsData>,
+    },
+}
+
+pub fn create_surface_from_handles(
+    instance: &mut wgpu::Instance,
+    display: *mut wayland_sys::client::wl_display,
+    surfac: *mut wayland_sys::client::wl_proxy,
+) -> Result<wgpu::Surface<'static>, color_eyre::eyre::Error> {
+    let raw_display_handle = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(
+        NonNull::new(display as *mut _).unwrap(),
+    ));
+    let raw_window_handle = RawWindowHandle::Wayland(WaylandWindowHandle::new(
+        NonNull::new(surfac as *mut _).unwrap(),
+    ));
+    let surface = unsafe {
+        instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+            raw_display_handle,
+            raw_window_handle,
+        })
+    }?;
+    Ok(surface)
 }

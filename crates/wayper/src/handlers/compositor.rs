@@ -9,6 +9,7 @@ use tracing::{debug, error, info, trace};
 use crate::{
     handlers::{Wayper, utils},
     map::OutputKey,
+    wgpu_renderer::RenderCommand,
 };
 
 impl CompositorHandler for Wayper {
@@ -37,17 +38,17 @@ impl CompositorHandler for Wayper {
         // TODO: visibility via logs. considering slog
         trace!("frame called");
 
-        let process_start = Instant::now();
-        if let Ok(count) = self.wgpu.process_loaded_textures()
-            && count > 0
-        {
-            let process_time = process_start.elapsed();
-            debug!(
-                count = count,
-                time_us = process_time.as_micros(),
-                "Processed pre-loaded textures"
-            );
-        }
+        // let process_start = Instant::now();
+        // if let Ok(count) = self.renderer_tx.process_loaded_textures()
+        //     && count > 0
+        // {
+        //     let process_time = process_start.elapsed();
+        //     debug!(
+        //         // count = count,
+        //         time_us = process_time.as_micros(),
+        //         "Processed pre-loaded textures"
+        //     );
+        // }
 
         let surface_id = surface.id();
 
@@ -91,14 +92,15 @@ impl CompositorHandler for Wayper {
                 };
 
                 let render_start = Instant::now();
-                if let Err(e) = self.wgpu.render_frame(
-                    &output_name,
-                    previous_img.as_deref(),
-                    &current_img,
-                    eased_progress,
+                let render_frame = self.renderer_tx.send(RenderCommand::RenderFrame {
+                    output_name: output_name.clone(),
+                    previous_image: previous_img,
+                    current_image: current_img,
+                    progress,
                     transition_type,
-                    Some(transition_direction),
-                ) {
+                    direction: Some(transition_direction),
+                });
+                if let Err(e) = render_frame {
                     error!("failed to render transition frame: {e}");
                 }
                 let render_time = render_start.elapsed();
@@ -127,7 +129,9 @@ impl CompositorHandler for Wayper {
                     // Log GPU metrics every 100 frames
                     if output_handle.frame_count % 100 == 0 {
                         drop(output_handle);
-                        self.wgpu.log_cache_metrics();
+                        self.renderer_tx
+                            .send(RenderCommand::LogCacheMetrics)
+                            .unwrap();
                         output_handle = output.lock().unwrap();
                     }
 
@@ -201,14 +205,15 @@ impl CompositorHandler for Wayper {
                     let output_name = output_handle.output_name.clone();
 
                     let previous_img = output_handle.previous_img();
-                    if let Err(e) = self.wgpu.render_frame(
-                        &output_handle.output_name,
-                        previous_img.as_deref(),
-                        image.as_path(),
-                        1.0,
-                        0,
-                        None,
-                    ) {
+                    let render_frame = self.renderer_tx.send(RenderCommand::RenderFrame {
+                        output_name: output_name.clone(),
+                        previous_image: previous_img,
+                        current_image: image.clone(),
+                        progress: 1.0,
+                        transition_type: 0,
+                        direction: None,
+                    });
+                    if let Err(e) = render_frame {
                         error!("failed to render frame: {e}");
                     }
 
@@ -225,7 +230,9 @@ impl CompositorHandler for Wayper {
                     // Log GPU metrics every 100 frames
                     if output_handle.frame_count % 100 == 0 {
                         drop(output_handle);
-                        self.wgpu.log_cache_metrics();
+                        self.renderer_tx
+                            .send(RenderCommand::LogCacheMetrics)
+                            .unwrap();
                         output_handle = output.lock().unwrap();
                     }
                 }
@@ -234,11 +241,11 @@ impl CompositorHandler for Wayper {
 
                 let next_image = output_handle.peek_next_img();
                 if let Some(dims) = output_handle.dimensions
-                    && let Err(e) = self.wgpu.request_texture_load(
-                        &next_image,
-                        dims,
-                        output_handle.output_name.clone(),
-                    )
+                    && let Err(e) = self.renderer_tx.send(RenderCommand::RequestTextureLoad {
+                        image_path: next_image,
+                        target_size: dims,
+                        output_name: output_handle.output_name.clone(),
+                    })
                 {
                     error!("Failed to request pre-load: {}", e);
                 }

@@ -2,6 +2,7 @@ use std::{collections::HashMap, ops::Deref, path::Path, sync::mpsc::SyncSender, 
 
 use clap::{Parser, ValueEnum};
 use color_eyre::Result;
+use handlers::Wayper;
 use smithay_client_toolkit::{
     compositor::CompositorState,
     output::OutputState,
@@ -18,16 +19,17 @@ use tracing::{info, level_filters::LevelFilter};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_log::LogTracer;
 use tracing_subscriber::{Layer as TLayer, fmt, prelude::__tracing_subscriber_SubscriberExt};
-use handlers::Wayper;
 use wayper_lib::{
     config::Config,
-    socket::{OutputWallpaper, SocketCommand, SocketError, SocketOutput, WayperSocket, get_socket_path},
+    socket::{
+        OutputWallpaper, SocketCommand, SocketError, SocketOutput, WayperSocket, get_socket_path,
+    },
 };
 
 use crate::{
     map::{OutputKey, OutputMap},
     output::OutputRepr,
-    wgpu_renderer::WgpuRenderer,
+    wgpu_renderer::{RenderCommand, WgpuRenderer},
 };
 
 mod map;
@@ -119,6 +121,8 @@ fn main() -> Result<()> {
         color_eyre::eyre::eyre!(e.to_string())
     })?;
 
+    let (renderer_tx, wgpu_instance) = WgpuRenderer::new();
+
     let mut data = handlers::Wayper {
         compositor_state: compositor,
         registry_state: RegistryState::new(&globals),
@@ -131,7 +135,8 @@ fn main() -> Result<()> {
         c_queue_handle: event_loop.handle(),
         draw_tokens: HashMap::new(),
         socket_counter: 0,
-        wgpu: WgpuRenderer::new(),
+        renderer_tx,
+        wgpu_instance,
     };
 
     loop {
@@ -247,7 +252,13 @@ fn handle_command(
             socket_responses.push(SocketOutput::Profiles(wayper.config.profiles.profiles()))
         }
         SocketCommand::GpuMetrics => {
-            let metrics = wayper.wgpu.get_metrics_data();
+            let (tx, rx) = oneshot::channel();
+            wayper
+                .renderer_tx
+                .send(RenderCommand::GetMetricsData { reply: tx })
+                .unwrap();
+            let metrics = rx.recv().unwrap();
+
             socket_responses.push(SocketOutput::GpuMetrics(metrics));
         }
         // TODO: hide

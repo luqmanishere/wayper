@@ -58,22 +58,18 @@ impl LayerShellHandler for Wayper {
                     let output_name = output_guard.output_name.clone();
 
                     // Configure the wgpu surface for this output
-                    let surface_format = match self
-                        .wgpu
-                        .configure_surface(&output_name, (new_width, new_height))
-                    {
-                        Ok(format) => format,
+                    match self.renderer_tx.send(
+                        crate::wgpu_renderer::RenderCommand::ConfigureSurface {
+                            output_name: output_name.clone(),
+                            size: (new_width, new_height),
+                        },
+                    ) {
+                        Ok(_) => {}
                         Err(e) => {
                             error!("Failed to configure surface: {}", e);
                             return;
                         }
                     };
-
-                    // Initialize the render pipeline if not already done
-                    if let Err(e) = self.wgpu.init_image_pipeline(surface_format) {
-                        error!("Failed to initialize image pipeline: {}", e);
-                        return;
-                    }
 
                     let img_list_len = output_guard.img_list.len();
                     let current_index = output_guard.index;
@@ -86,10 +82,12 @@ impl LayerShellHandler for Wayper {
                     }
 
                     if let Some(current_img) = output_guard.img_list.get(current_index)
-                        && let Err(e) = self.wgpu.request_texture_load(
-                            current_img,
-                            (new_width, new_height),
-                            output_name.clone(),
+                        && let Err(e) = self.renderer_tx.send(
+                            crate::wgpu_renderer::RenderCommand::RequestTextureLoad {
+                                image_path: current_img.to_path_buf(),
+                                target_size: (new_width, new_height),
+                                output_name: output_name.clone(),
+                            },
                         )
                     {
                         error!("Failed to pre-load current image: {}", e);
@@ -97,30 +95,33 @@ impl LayerShellHandler for Wayper {
 
                     let next_index = (current_index + 1) % img_list_len;
                     if let Some(next_img) = output_guard.img_list.get(next_index)
-                        && let Err(e) = self.wgpu.request_texture_load(
-                            next_img,
-                            (new_width, new_height),
-                            output_name.clone(),
+                        && let Err(e) = self.renderer_tx.send(
+                            crate::wgpu_renderer::RenderCommand::RequestTextureLoad {
+                                image_path: next_img.to_path_buf(),
+                                target_size: (new_width, new_height),
+                                output_name: output_name.clone(),
+                            },
                         )
                     {
                         error!("Failed to pre-load next image: {}", e);
                     }
 
                     // TODO: is this needed?
-                    let next_next_index = (current_index + 2) % img_list_len;
-                    if let Some(next_next_img) = output_guard.img_list.get(next_next_index)
-                        && let Err(e) = self.wgpu.request_texture_load(
-                            next_next_img,
-                            (new_width, new_height),
-                            output_name.clone(),
-                        )
-                    {
-                        error!("Failed to pre-load image after next: {}", e);
-                    }
+                    // let next_next_index = (current_index + 2) % img_list_len;
+                    // if let Some(next_next_img) = output_guard.img_list.get(next_next_index)
+                    //     && let Err(e) = self.renderer_tx.request_texture_load(
+                    //         next_next_img,
+                    //         (new_width, new_height),
+                    //         output_name.clone(),
+                    //     )
+                    // {
+                    //     error!("Failed to pre-load image after next: {}", e);
+                    // }
 
                     let (duration_ms, target_fps, transition_type, transition_direction) =
                         if output_config.is_transitions_enabled(&self.config)
-                            && let Some(transition_cfg) = output_config.get_transition_config(&self.config)
+                            && let Some(transition_cfg) =
+                                output_config.get_transition_config(&self.config)
                         {
                             let transition_type = transition_cfg.pick_random_type();
                             let duration = transition_cfg.duration_ms;

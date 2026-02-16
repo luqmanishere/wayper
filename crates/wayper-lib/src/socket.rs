@@ -395,7 +395,7 @@ impl std::fmt::Display for OutputWallpaper {
 }
 
 /// GPU performance metrics data
-#[derive(Deserialize, Serialize, Debug, PartialEq, Eq, Clone)]
+#[derive(Deserialize, Serialize, Debug, PartialEq, Eq, Clone, Default)]
 pub struct GpuMetricsData {
     pub texture_cache_size: usize,
     pub texture_cache_hits: u64,
@@ -440,11 +440,7 @@ impl std::fmt::Display for GpuMetricsData {
             "    Hits: {} | Misses: {} | Hit Rate: {:.1}%",
             self.bind_group_cache_hits, self.bind_group_cache_misses, bind_group_hit_rate
         )?;
-        writeln!(
-            f,
-            "  Total Textures Loaded: {}",
-            self.total_textures_loaded
-        )?;
+        writeln!(f, "  Total Textures Loaded: {}", self.total_textures_loaded)?;
         write!(f, "  Total Frames Rendered: {}", self.total_frames_rendered)
     }
 }

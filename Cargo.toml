@@ -1,32 +1,30 @@
 [workspace]
-members = ["crates/wayper-lib", "crates/wayper", "crates/wayper-launcher"]
+resolver = "3"
+members = ["crates/wayper", "crates/wayper-launcher", "crates/wayper-lib"]
 # default-members = ["crates/wayper"]
 exclude = ["crates/wayperctl"]
-resolver = "3"
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
-color-eyre = "0.6"
-smithay-client-toolkit = { version = "0.19" }
-image = "0.25"
 clap = { version = "4", features = ["derive"] }
-thiserror = { version = "2" }
-
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = [
-    "env-filter",
-    "fmt",
-    "time",
-    "local-time",
-] }
-tracing-appender = "0.2"
-
+color-eyre = "0.6"
+image = "0.25"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["std"] }
+smithay-client-toolkit = { version = "0.19" }
 strum = { version = "0.27", features = ["derive"] }
+thiserror = { version = "2" }
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = [
+  "env-filter",
+  "fmt",
+  "local-time",
+  "time",
+] }
 
 [profile.dev.package]
 # image runs too slow in debug builds. opt-level 3 helps a bit

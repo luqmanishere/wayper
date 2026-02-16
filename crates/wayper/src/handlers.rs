@@ -1,3 +1,4 @@
+use std::sync::mpsc::Sender;
 use std::{collections::HashMap, time::Instant};
 
 use smithay_client_toolkit::reexports::client;
@@ -20,10 +21,10 @@ use tracing::{error, info, warn};
 
 use wayper_lib::config::Config;
 
+use crate::wgpu_renderer::{RenderCommand, create_surface_from_handles};
 use crate::{
     map::{OutputKey, OutputMap},
     output::OutputRepr,
-    wgpu_renderer::WgpuRenderer,
 };
 
 mod compositor;
@@ -51,7 +52,8 @@ pub struct Wayper {
     pub config: Config,
     pub socket_counter: u64,
 
-    pub wgpu: WgpuRenderer,
+    pub renderer_tx: Sender<RenderCommand>,
+    pub wgpu_instance: wgpu::Instance,
 }
 
 // TODO: modularize with calloop?
@@ -93,12 +95,18 @@ impl Wayper {
             // commit the layer
             layer.commit();
 
-            self.wgpu
-                .new_surface(
-                    name.clone(),
-                    _conn.backend().display_ptr(),
-                    layer.wl_surface().id().as_ptr(),
-                )
+            let wgpu_surface = create_surface_from_handles(
+                &mut self.wgpu_instance,
+                _conn.backend().display_ptr(),
+                layer.wl_surface().id().as_ptr(),
+            )
+            .expect("Unable to create wgpu surface");
+
+            self.renderer_tx
+                .send(RenderCommand::NewSurface {
+                    output_name: name.clone(),
+                    surface: wgpu_surface,
+                })
                 .unwrap();
 
             // no config no problem
