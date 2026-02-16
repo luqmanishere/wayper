@@ -197,7 +197,7 @@ impl WgpuRenderer {
 impl WgpuRenderer {
     /// Load an image texture from a specified path for a a target size. NoOp if the texture is already cached,
     /// otherwise the image is loaded and resized to the target size.
-    pub fn request_texture_load(
+    fn request_texture_load(
         &mut self,
         image_path: &Path,
         target_size: (u32, u32),
@@ -220,7 +220,7 @@ impl WgpuRenderer {
 
     /// Process loaded textures returned by the texture loader
     #[tracing::instrument(skip(self))]
-    pub fn process_loaded_textures(&mut self) -> color_eyre::Result<usize> {
+    fn process_loaded_textures(&mut self) -> color_eyre::Result<usize> {
         let device = self
             .device
             .as_ref()
@@ -399,7 +399,7 @@ fn load_resize_image(
 
 impl WgpuRenderer {
     /// Add a new surface to the renderer cache
-    pub fn new_surface(
+    fn new_surface(
         &mut self,
         output_name: String,
         surface: wgpu::Surface<'static>,
@@ -423,7 +423,7 @@ impl WgpuRenderer {
 
     /// Build and initialize the image pipeline
     #[tracing::instrument(skip(self), fields(format = ?surface_format))]
-    pub fn init_image_pipeline(
+    fn init_image_pipeline(
         &mut self,
         surface_format: wgpu::TextureFormat,
     ) -> color_eyre::Result<()> {
@@ -623,7 +623,7 @@ impl WgpuRenderer {
     }
 
     /// Get or create a black dummy texture of the specified size
-    pub fn get_or_create_dummy_texture(
+    fn get_or_create_dummy_texture(
         &mut self,
         target_size: (u32, u32),
     ) -> color_eyre::Result<String> {
@@ -690,7 +690,7 @@ impl WgpuRenderer {
     /// Load an image and create a wgpu texture from it
     #[tracing::instrument(skip(self),
         fields(path = %image_path.display(), size = format!("{}x{}", target_size.0, target_size.1)))]
-    pub fn load_image_texture(
+    fn load_image_texture(
         &mut self,
         image_path: &Path,
         target_size: (u32, u32),
@@ -765,7 +765,7 @@ impl WgpuRenderer {
     }
 
     /// Get or create a bind group for two textures
-    pub fn get_or_create_bind_group(
+    fn get_or_create_bind_group(
         &mut self,
         cache_key1: &str,
         cache_key2: &str,
@@ -849,7 +849,7 @@ impl WgpuRenderer {
     }
 
     /// Update transition parameters for animations
-    pub fn update_transition_params(
+    fn update_transition_params(
         &mut self,
         progress: f32,
         anim_type: u32,
@@ -879,7 +879,7 @@ impl WgpuRenderer {
     }
 
     /// Log cache metrics for monitoring and debugging
-    pub fn log_cache_metrics(&self) {
+    fn log_cache_metrics(&self) {
         let tex_metrics = self.texture_cache.metrics();
         let bg_metrics = self.bind_group_cache.metrics();
         let frames = self.total_frames_rendered.load(Ordering::Relaxed);
@@ -906,7 +906,7 @@ impl WgpuRenderer {
     /// Configure surface for a specific output
     #[tracing::instrument(skip(self),
         fields(output = output_name, width = size.0, height = size.1))]
-    pub fn configure_surface(
+    fn configure_surface(
         &mut self,
         output_name: &str,
         size: (u32, u32),
@@ -955,7 +955,7 @@ impl WgpuRenderer {
     /// * `transition_type` - Type of transition effect (0 = crossfade, etc.)
     #[tracing::instrument(skip(self, previous_image, current_image),
         fields(output = output_name, progress = progress, transition_type = transition_type))]
-    pub fn render_frame(
+    fn render_frame(
         &mut self,
         output_name: &str,
         previous_image: Option<&Path>,
@@ -1074,7 +1074,7 @@ impl WgpuRenderer {
     }
 
     /// Get GPU metrics data for socket response
-    pub fn get_metrics_data(&self) -> wayper_lib::socket::GpuMetricsData {
+    fn get_metrics_data(&self) -> wayper_lib::socket::GpuMetricsData {
         let tex_metrics = self.texture_cache.metrics();
         let bg_metrics = self.bind_group_cache.metrics();
 
