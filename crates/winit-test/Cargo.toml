@@ -1,0 +1,12 @@
+[package]
+name = "winit-test"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = "1.0"
+bytemuck = { version = "1.16", features = ["derive"] }
+ffmpeg-next = "8"
+pollster = "0.3"
+wgpu = "0.20"
+winit = "0.30"

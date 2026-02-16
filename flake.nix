@@ -120,6 +120,8 @@
             python3Packages.tkinter
             psrecord
             cargo-machete
+            ffmpeg
+            ffmpeg.dev
 
             libxkbcommon
             wayland
@@ -139,7 +141,7 @@
           ];
         in
           pkgs.mkShell {
-            nativeBuildInputs = with pkgs; [pkg-config];
+            nativeBuildInputs = with pkgs; [pkg-config rustPlatform.bindgenHook];
             inherit buildInputs;
             inputsFrom = [packages.default];
             shellHook = ''
