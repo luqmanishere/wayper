@@ -254,20 +254,12 @@ impl WgpuRenderer {
                 view_formats: &[],
             });
 
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
+            write_texture_rgba8_padded(
+                queue,
+                &texture,
+                result.dimensions.0,
+                result.dimensions.1,
                 &result.image_data,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(4 * result.dimensions.0),
-                    rows_per_image: Some(result.dimensions.1),
-                },
-                texture_size,
             );
 
             let size_bytes = Self::texture_size_bytes(result.dimensions.0, result.dimensions.1);
@@ -278,6 +270,72 @@ impl WgpuRenderer {
 
         Ok(count)
     }
+}
+
+fn write_texture_rgba8_padded(
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+) {
+    let bytes_per_pixel = 4u32;
+    let unpadded_bpr = width * bytes_per_pixel;
+    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    let padded_bpr = ((unpadded_bpr + align - 1) / align) * align;
+
+    if padded_bpr == unpadded_bpr {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(unpadded_bpr),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        return;
+    }
+
+    let row_bytes = unpadded_bpr as usize;
+    let padded_row_bytes = padded_bpr as usize;
+    let padded_size = padded_row_bytes.saturating_mul(height as usize);
+    let mut padded = vec![0u8; padded_size];
+    for y in 0..height as usize {
+        let src = &rgba[y * row_bytes..(y + 1) * row_bytes];
+        let dst = &mut padded[y * padded_row_bytes..y * padded_row_bytes + row_bytes];
+        dst.copy_from_slice(src);
+    }
+
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &padded,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(padded_bpr),
+            rows_per_image: Some(height),
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
 }
 
 /// Texture loader worker ran in a seperate thread. Results are pushed to the results channel
