@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/wayper", "crates/wayper-launcher", "crates/wayper-lib"]
+members = ["crates/wayper", "crates/wayper-launcher", "crates/wayper-lib", "crates/wayper-windows"]
 # default-members = ["crates/wayper"]
 exclude = ["crates/wayperctl"]
 
