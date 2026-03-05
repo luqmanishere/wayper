@@ -1,12 +1,25 @@
+#[cfg(target_os = "linux")]
 use std::os::unix::net::UnixStream;
 
+#[cfg(target_os = "linux")]
 use clap::{CommandFactory, Parser};
+#[cfg(target_os = "linux")]
 use color_eyre::eyre::{Result, WrapErr, eyre};
+#[cfg(target_os = "linux")]
 use tracing::{info, level_filters::LevelFilter};
+#[cfg(target_os = "linux")]
 use tracing_appender::non_blocking::WorkerGuard;
+#[cfg(target_os = "linux")]
 use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt};
+#[cfg(target_os = "linux")]
 use wayper_lib::socket::{SocketCommand, SocketError, SocketOutput, get_socket_path};
 
+#[cfg(not(target_os = "linux"))]
+fn main() -> color_eyre::Result<()> {
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
 fn main() -> Result<()> {
     clap_complete::CompleteEnv::with_factory(|| Cli::command().bin_name("wayperctl")).complete();
     color_eyre::install()?;
@@ -22,8 +35,12 @@ fn main() -> Result<()> {
         get_socket_path()?
     };
 
-    let mut stream = UnixStream::connect(&socket_path)
-        .wrap_err_with(|| eyre!("could not connect to wayper socket at {}", socket_path.display()))?;
+    let mut stream = UnixStream::connect(&socket_path).wrap_err_with(|| {
+        eyre!(
+            "could not connect to wayper socket at {}",
+            socket_path.display()
+        )
+    })?;
 
     match cli.command {
         Commands::Socket(ref command) => {
@@ -178,6 +195,7 @@ fn main() -> Result<()> {
 }
 
 /// Handle errors from the daemon
+#[cfg(target_os = "linux")]
 fn handle_error_from_daemon(cli: &Cli, output: &SocketOutput) -> Result<(), SocketError> {
     if let SocketOutput::SingleError(error) = output {
         if cli.json {
@@ -190,11 +208,13 @@ fn handle_error_from_daemon(cli: &Cli, output: &SocketOutput) -> Result<(), Sock
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 fn failed_to_get_response() -> Result<()> {
     tracing::error!("failed to get response");
     Err(eyre!("failed to get response"))
 }
 
+#[cfg(target_os = "linux")]
 fn start_logger() -> Vec<WorkerGuard> {
     let mut guards = Vec::new();
     let file_appender = tracing_appender::rolling::never("/tmp/wayper", "wayperctl-log");
@@ -225,6 +245,7 @@ fn start_logger() -> Vec<WorkerGuard> {
 ///
 /// For programmatical use, a json output option is provided. There is no guarantee
 /// that the interface will remain the same until 1.0 (as if that will ever happen).
+#[cfg(target_os = "linux")]
 #[derive(Parser)]
 #[command(version, about)]
 struct Cli {
@@ -240,6 +261,7 @@ struct Cli {
     command: Commands,
 }
 
+#[cfg(target_os = "linux")]
 #[derive(clap::Subcommand)]
 enum Commands {
     #[command(flatten)]

@@ -1,5 +1,6 @@
 //! Code for the socket daemon and client communication
 
+#[cfg(target_os = "linux")]
 use std::{
     io::{BufRead, Write},
     os::unix::net::{UnixListener, UnixStream},

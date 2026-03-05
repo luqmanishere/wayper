@@ -4,10 +4,12 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-wayper-lib = { path = "../wayper-lib" }
 color-eyre.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+wayper-lib = { path = "../wayper-lib" }
 
 strum = { version = "0.27", features = ["derive"] }

@@ -1,5 +1,5 @@
 //! This is a WIP
-
+#[cfg(target_os = "linux")]
 use std::{
     io::{BufRead, Write},
     os::unix::net::UnixStream,
@@ -7,11 +7,21 @@ use std::{
     str::FromStr,
 };
 
+#[cfg(target_os = "linux")]
 use clap::Parser;
+#[cfg(target_os = "linux")]
 use color_eyre::eyre::{Context, ContextCompat, eyre};
+#[cfg(target_os = "linux")]
 use strum::VariantNames;
+#[cfg(target_os = "linux")]
 use wayper_lib::socket::{SocketCommand, SocketOutput};
 
+#[cfg(not(target_os = "linux"))]
+fn main() -> color_eyre::Result<()> {
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
 fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
 
@@ -40,6 +50,7 @@ fn main() -> color_eyre::Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 pub struct Prompt {
     launcher: Launcher,
     state: PromptState,
@@ -48,6 +59,7 @@ pub struct Prompt {
     last_output: Option<String>,
 }
 
+#[cfg(target_os = "linux")]
 impl Prompt {
     pub fn new(profiles: Vec<String>, launcher: Launcher, socket_path: UnixStream) -> Self {
         Self {
@@ -204,6 +216,7 @@ impl Prompt {
     }
 }
 
+#[cfg(target_os = "linux")]
 #[derive(Default)]
 pub enum PromptState {
     #[default]
@@ -213,6 +226,7 @@ pub enum PromptState {
 }
 
 /// Launcher representation for the prompt builder. Seperate from cli args due to enum variant limitations
+#[cfg(target_os = "linux")]
 #[derive(strum::Display, Clone)]
 #[strum(serialize_all = "lowercase")]
 pub enum Launcher {
@@ -221,6 +235,7 @@ pub enum Launcher {
     Custom(String),
 }
 
+#[cfg(target_os = "linux")]
 #[derive(Parser)]
 #[command(version, about)]
 pub struct Cli {
@@ -238,12 +253,14 @@ pub struct Cli {
     launcher_command: Option<String>,
 }
 
+#[cfg(target_os = "linux")]
 #[derive(Clone, clap::ValueEnum)]
 enum CliLauncher {
     Fuzzel,
     Custom,
 }
 
+#[cfg(target_os = "linux")]
 impl CliLauncher {
     pub fn to_launcher(&self, custom: Option<String>) -> Launcher {
         match self {

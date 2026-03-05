@@ -9,11 +9,13 @@ name = "wayperctl"
 path = "src/wayperctl.rs"
 
 [dependencies]
+color-eyre.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
 bytemuck = { version = "1" }
 chrono = "0.4"
 clap.workspace = true
 clap_complete = { version = "4", features = ["unstable-dynamic"] }
-color-eyre.workspace = true
 dashmap = { version = "7.0.0-rc2" }
 image.workspace = true
 indexmap = { version = "2" }

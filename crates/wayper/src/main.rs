@@ -1,8 +1,12 @@
+#[cfg(target_os = "linux")]
 use std::{collections::HashMap, ops::Deref, path::Path, sync::mpsc::SyncSender, time::Instant};
 
+#[cfg(target_os = "linux")]
 use clap::{Parser, ValueEnum};
 use color_eyre::Result;
+#[cfg(target_os = "linux")]
 use handlers::Wayper;
+#[cfg(target_os = "linux")]
 use smithay_client_toolkit::{
     compositor::CompositorState,
     output::OutputState,
@@ -15,10 +19,15 @@ use smithay_client_toolkit::{
     shell::wlr_layer::LayerShell,
     shm::Shm,
 };
+#[cfg(target_os = "linux")]
 use tracing::{info, level_filters::LevelFilter};
+#[cfg(target_os = "linux")]
 use tracing_appender::non_blocking::WorkerGuard;
+#[cfg(target_os = "linux")]
 use tracing_log::LogTracer;
+#[cfg(target_os = "linux")]
 use tracing_subscriber::{Layer as TLayer, fmt, prelude::__tracing_subscriber_SubscriberExt};
+#[cfg(target_os = "linux")]
 use wayper_lib::{
     config::Config,
     socket::{
@@ -26,19 +35,32 @@ use wayper_lib::{
     },
 };
 
+#[cfg(target_os = "linux")]
 use crate::{
     map::{OutputKey, OutputMap},
     output::OutputRepr,
     wgpu_renderer::{RenderCommand, WgpuRenderer},
 };
 
+#[cfg(target_os = "linux")]
 mod map;
+#[cfg(target_os = "linux")]
 mod metered_cache;
+#[cfg(target_os = "linux")]
 mod output;
 // mod render_server;
+#[cfg(target_os = "linux")]
 mod handlers;
+#[cfg(target_os = "linux")]
 mod wgpu_renderer;
 
+#[cfg(not(target_os = "linux"))]
+fn main() -> Result<()> {
+    println!("Windows is not supported by this bin!");
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
 fn main() -> Result<()> {
     color_eyre::install()?;
     let cli = WayperCli::parse();
@@ -148,6 +170,7 @@ fn main() -> Result<()> {
     // drop(data.wgpu);
 }
 
+#[cfg(target_os = "linux")]
 #[tracing::instrument(skip_all, fields(counter = _counter))]
 fn handle_command(
     _counter: u64,
@@ -293,11 +316,13 @@ fn handle_command(
 }
 
 /// Custom timer that displays both wall-clock time and uptime since application start
+#[cfg(target_os = "linux")]
 #[derive(Clone)]
 struct UptimeTimer {
     start: Instant,
 }
 
+#[cfg(target_os = "linux")]
 impl UptimeTimer {
     fn new() -> Self {
         Self {
@@ -306,6 +331,7 @@ impl UptimeTimer {
     }
 }
 
+#[cfg(target_os = "linux")]
 impl tracing_subscriber::fmt::time::FormatTime for UptimeTimer {
     fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> std::fmt::Result {
         // Format wall-clock time
@@ -322,6 +348,7 @@ impl tracing_subscriber::fmt::time::FormatTime for UptimeTimer {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn start_logging(file_log_level: LogLevel) -> Vec<WorkerGuard> {
     let mut guards = Vec::new();
     let file_appender = tracing_appender::rolling::never("/tmp/wayper", "wayper-log");
@@ -352,6 +379,7 @@ fn start_logging(file_log_level: LogLevel) -> Vec<WorkerGuard> {
     guards
 }
 
+#[cfg(target_os = "linux")]
 #[derive(Parser)]
 struct WayperCli {
     /// Path to the config to use
@@ -363,6 +391,7 @@ struct WayperCli {
     log_level: LogLevel,
 }
 
+#[cfg(target_os = "linux")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Default)]
 enum LogLevel {
     Error,
@@ -372,6 +401,8 @@ enum LogLevel {
     Debug,
     Trace,
 }
+
+#[cfg(target_os = "linux")]
 impl LogLevel {
     pub fn as_loglevel(&self) -> tracing_subscriber::filter::LevelFilter {
         match self {
