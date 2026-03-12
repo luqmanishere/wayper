@@ -1,0 +1,11 @@
+[content]
+type = "image"
+path = "samples/wallpapers/waifu/wallhaven-9djped.jpg"
+fit = "cover"
+
+# Or use folders:
+#
+# [content]
+# type = "image"
+# folders = ["samples/wallpapers", "more/wallpapers"]
+# fit = "contain"

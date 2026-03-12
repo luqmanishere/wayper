@@ -1,8 +1,12 @@
-use std::sync::{Arc, mpsc::Sender};
+use std::{path::PathBuf, sync::Arc, time::Instant};
 
+use clap::Parser;
 use env_logger::Env;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use wgpu::naga::FastHashMap;
+use wayper_windows::config::{Config, ResolvedContent, default_config_path};
+use wayper_windows::windows_host::{
+    find_shelldll_defview, get_progman, reparent_window, set_z_pos, spawn_workerw,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     GWL_EXSTYLE, GWL_STYLE, GetClassNameW, GetParent, GetWindowLongPtrW,
 };
@@ -10,14 +14,13 @@ use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
     event_loop::{ControlFlow, EventLoop, EventLoopProxy},
-    window::{Window, WindowId},
-};
-use wayper_windows::windows_host::{
-    find_shelldll_defview, get_progman, reparent_window, set_z_pos, spawn_workerw,
+    window::Window,
 };
 
-use crate::renderer::{Renderer, RendererAction};
+use crate::engine::Engine;
 
+mod engine;
+mod player;
 mod renderer;
 
 fn main() -> color_eyre::Result<()> {
@@ -31,41 +34,43 @@ fn main() -> color_eyre::Result<()> {
 
     log::info!("logger initialized!");
 
-    let mut app = App::new();
+    let args = Args::parse();
+    let config_path = args.config.unwrap_or_else(default_config_path);
+    let config = Config::load_file(&config_path)?;
+    let mut app = App::new(config)?;
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     let proxy = event_loop.create_proxy();
     install_ctrl_c_handler(proxy);
-    event_loop.set_control_flow(ControlFlow::Poll);
+    event_loop.set_control_flow(ControlFlow::Wait);
     event_loop.run_app(&mut app)?;
     Ok(())
 }
 
+#[derive(Debug, Parser)]
+struct Args {
+    #[arg(long)]
+    config: Option<PathBuf>,
+}
+
 struct App {
-    #[expect(unused)]
-    wgpu_instance: wgpu::Instance,
-    renderer_tx: Sender<RendererAction>,
-    windows: FastHashMap<String, Arc<Window>>,
-    window_id_iden_map: FastHashMap<WindowId, String>,
+    engine: Engine,
 }
 
 impl App {
-    pub fn new() -> Self {
-        let (wgpu_instance, renderer_tx) = pollster::block_on(Renderer::new());
-        Self {
-            wgpu_instance,
-            renderer_tx,
-            windows: Default::default(),
-            window_id_iden_map: Default::default(),
-        }
-    }
+    pub fn new(config: Config) -> color_eyre::Result<Self> {
+        let resolved_image = match config.resolve_content()? {
+            ResolvedContent::Image(image) => image,
+            ResolvedContent::Video(_) => {
+                color_eyre::eyre::bail!("video content is not implemented yet in wayper-windows")
+            }
+            ResolvedContent::Scene(_) => {
+                color_eyre::eyre::bail!("scene content is not implemented yet in wayper-windows")
+            }
+        };
 
-    #[expect(unused)]
-    fn get_window_from_id(&self, window_id: &WindowId) -> Option<&Arc<Window>> {
-        if let Some(output_iden) = self.window_id_iden_map.get(window_id) {
-            self.windows.get(output_iden)
-        } else {
-            None
-        }
+        Ok(Self {
+            engine: pollster::block_on(Engine::new(resolved_image))?,
+        })
     }
 }
 
@@ -75,7 +80,7 @@ impl ApplicationHandler<UserEvent> for App {
 
         for mon in event_loop.available_monitors() {
             let output_iden = mon.name().unwrap_or("Unknown".to_string());
-            if self.windows.get(&output_iden).is_none() {
+            if !self.engine.has_output(&output_iden) {
                 // make new window
                 let size = mon.size();
                 let window = Arc::new(
@@ -87,29 +92,25 @@ impl ApplicationHandler<UserEvent> for App {
                         )
                         .expect("Can create windows"),
                 );
-                let window_id = window.id();
-                log::info!("window {:?} created", window_id);
+                log::info!("window {:?} created", window.id());
 
-                self.windows.insert(output_iden.clone(), window.clone());
-                self.window_id_iden_map
-                    .insert(window_id, output_iden.clone());
+                if let Err(err) = self
+                    .engine
+                    .add_output(output_iden.clone(), window.clone(), size)
+                {
+                    log::error!("failed to add output {output_iden}: {err}");
+                    event_loop.exit();
+                    return;
+                }
 
                 // windows stuff
                 let progman = get_progman().unwrap();
                 let workerw = spawn_workerw(progman).unwrap();
                 let shelldll = find_shelldll_defview(progman).unwrap();
                 log_window_state("main pre-attach", hwnd_from_window(&window).unwrap());
-                reparent_window(progman,  window.clone()).unwrap();
+                reparent_window(progman, window.clone()).unwrap();
                 set_z_pos(shelldll, workerw, window.clone()).unwrap();
                 log_window_state("main post-attach", hwnd_from_window(&window).unwrap());
-
-                self.renderer_tx
-                    .send(RendererAction::NewSurface {
-                        output_iden,
-                        size: (size.width, size.height),
-                        window_arc: window.clone(),
-                    })
-                    .expect("able to send");
 
                 window.request_redraw();
             }
@@ -130,35 +131,37 @@ impl ApplicationHandler<UserEvent> for App {
             }
 
             WindowEvent::RedrawRequested => {
-                // if let Some(window) = self.get_window_from_id(&window_id) {
-                //     let hwnd = hwnd_from_window(window).unwrap();
-                //     log_window_state("main redraw", hwnd);
-                // }
-
-                if let Some(output_iden) = self.window_id_iden_map.get(&window_id) {
-                    self.renderer_tx
-                        .send(RendererAction::RenderFrame {
-                            output_iden: output_iden.to_string(),
-                        })
-                        .expect("channel alive");
+                if let Some(output_iden) = self.engine.output_id_for_window(&window_id).cloned() {
+                    if let Err(err) = self.engine.render_output(&output_iden, Instant::now()) {
+                        log::error!("failed to render {output_iden}: {err}");
+                        event_loop.exit();
+                    }
                 }
-
-                // self.get_window_from_id(&window_id)
-                //     .expect("initialized")
-                //     .request_redraw();
             }
 
             WindowEvent::Resized(size) => {
-                if let Some(output_iden) = self.window_id_iden_map.get(&window_id) {
-                    self.renderer_tx
-                        .send(RendererAction::ResizeSurface {
-                            output_iden: output_iden.to_string(),
-                            new_size: (size.width, size.height),
-                        })
-                        .expect("able to send");
+                if let Some(output_iden) = self.engine.output_id_for_window(&window_id).cloned() {
+                    if let Err(err) = self.engine.resize_output(&output_iden, size) {
+                        log::error!("failed to resize {output_iden}: {err}");
+                        event_loop.exit();
+                    }
                 }
             }
             _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        let plan = self.engine.schedule(Instant::now());
+        for output_iden in plan.redraw_outputs {
+            if let Some(window) = self.engine.get_window(&output_iden) {
+                window.request_redraw();
+            }
+        }
+
+        match plan.next_wakeup {
+            Some(next) => event_loop.set_control_flow(ControlFlow::WaitUntil(next)),
+            None => event_loop.set_control_flow(ControlFlow::Wait),
         }
     }
 
@@ -210,10 +213,3 @@ fn install_ctrl_c_handler(proxy: EventLoopProxy<UserEvent>) {
 pub enum UserEvent {
     CtrlC,
 }
-
-//     fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
-//         self.size = new_size;
-
-//         // reconfigure the surface
-//         self.configure_surface();
-//     }
