@@ -58,7 +58,7 @@ impl ApplicationHandler<()> for App {
             .ok_or_eyre("missing SHELLDLL_DefView")
             .expect("find SHELLDLL_DefView");
 
-        windows_host::reparent_window(progman,  window.clone()).expect("reparent");
+        windows_host::reparent_window(progman, window.clone()).expect("reparent");
         attach_geometry(hwnd, progman, shelldll, workerw).expect("position");
 
         log_window_state("winit post-attach", hwnd);

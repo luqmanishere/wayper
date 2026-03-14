@@ -1,11 +1,19 @@
-[content]
+[defaults.content]
 type = "image"
 path = "samples/wallpapers/waifu/wallhaven-9djped.jpg"
 fit = "cover"
 
-# Or use folders:
+[defaults.content.alignment]
+horizontal = "center"
+vertical = "center"
+
+# Override a specific monitor by its winit monitor name.
 #
-# [content]
+# [outputs."DELL U2720Q".content]
 # type = "image"
-# folders = ["samples/wallpapers", "more/wallpapers"]
+# path = "samples/wallpapers/waifu/wallhaven-4x8wyq.jpg"
 # fit = "contain"
+#
+# [outputs."DELL U2720Q".content.alignment]
+# horizontal = "right"
+# vertical = "top"

@@ -3,7 +3,7 @@ use std::{path::PathBuf, sync::Arc, time::Instant};
 use clap::Parser;
 use env_logger::Env;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use wayper_windows::config::{Config, ResolvedContent, default_config_path};
+use wayper_windows::config::{Config, default_config_path};
 use wayper_windows::windows_host::{
     find_shelldll_defview, get_progman, reparent_window, set_z_pos, spawn_workerw,
 };
@@ -35,12 +35,16 @@ fn main() -> color_eyre::Result<()> {
     log::info!("logger initialized!");
 
     let args = Args::parse();
+
     let config_path = args.config.unwrap_or_else(default_config_path);
     let config = Config::load_file(&config_path)?;
+
     let mut app = App::new(config)?;
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
+
     let proxy = event_loop.create_proxy();
     install_ctrl_c_handler(proxy);
+
     event_loop.set_control_flow(ControlFlow::Wait);
     event_loop.run_app(&mut app)?;
     Ok(())
@@ -58,26 +62,18 @@ struct App {
 
 impl App {
     pub fn new(config: Config) -> color_eyre::Result<Self> {
-        let resolved_image = match config.resolve_content()? {
-            ResolvedContent::Image(image) => image,
-            ResolvedContent::Video(_) => {
-                color_eyre::eyre::bail!("video content is not implemented yet in wayper-windows")
-            }
-            ResolvedContent::Scene(_) => {
-                color_eyre::eyre::bail!("scene content is not implemented yet in wayper-windows")
-            }
-        };
-
         Ok(Self {
-            engine: pollster::block_on(Engine::new(resolved_image))?,
+            engine: pollster::block_on(Engine::new(config))?,
         })
     }
 }
 
+// TODO: how do I know if a monitor is removed, then I have to remove the window
 impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         log::debug!("resumed called, checking for new windows to spawn");
 
+        // create a new window for each monitor
         for mon in event_loop.available_monitors() {
             let output_iden = mon.name().unwrap_or("Unknown".to_string());
             if !self.engine.has_output(&output_iden) {
@@ -196,7 +192,7 @@ fn log_window_state(label: &str, hwnd: windows::Win32::Foundation::HWND) {
         let class_len = GetClassNameW(hwnd, &mut class_buf) as usize;
         let class_name = String::from_utf16_lossy(&class_buf[..class_len]);
 
-        eprintln!(
+        log::info!(
             "{label}: hwnd={hwnd:?} parent={parent:?} class={class_name} style=0x{style:016X} exstyle=0x{exstyle:016X}"
         );
     }

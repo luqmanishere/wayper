@@ -20,11 +20,18 @@ pub enum FitMode {
     Stretch,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct FitAlignment {
+    pub x: f32,
+    pub y: f32,
+}
+
 pub enum RenderScene {
     Image {
         texture: TextureHandle,
         image_size: (u32, u32),
         fit: FitMode,
+        alignment: FitAlignment,
     },
 }
 
@@ -172,6 +179,7 @@ impl Renderer {
         Ok(())
     }
 
+    /// Resize a surface to the provided size. Error if the surface does not exist.
     pub fn resize_surface(&mut self, output_iden: &str, new_size: (u32, u32)) -> Result<()> {
         let output = self
             .output_map
@@ -257,21 +265,27 @@ impl Renderer {
                 label: Some("wallpaper_render_encoder"),
             });
 
-        let (texture, image_size, fit) = match scene {
+        let (texture, image_size, fit, alignment) = match scene {
             RenderScene::Image {
                 texture,
                 image_size,
                 fit,
+                alignment,
             } => (
                 self.textures
                     .get(texture)
                     .ok_or_eyre("scene texture must be uploaded before rendering")?,
                 *image_size,
                 *fit,
+                *alignment,
             ),
         };
-        let image_params =
-            self.image_params((output.config.width, output.config.height), image_size, fit);
+        let image_params = self.image_params(
+            (output.config.width, output.config.height),
+            image_size,
+            fit,
+            alignment,
+        );
         let image_params_bytes = unsafe {
             std::slice::from_raw_parts(
                 image_params.as_ptr().cast::<u8>(),
@@ -365,6 +379,7 @@ impl Renderer {
         output_size: (u32, u32),
         image_size: (u32, u32),
         fit: FitMode,
+        alignment: FitAlignment,
     ) -> [f32; 4] {
         let output_aspect = output_size.0 as f32 / output_size.1.max(1) as f32;
         let image_aspect = image_size.0 as f32 / image_size.1.max(1) as f32;
@@ -374,19 +389,29 @@ impl Renderer {
             FitMode::Cover => {
                 if output_aspect > image_aspect {
                     let scale_y = image_aspect / output_aspect;
-                    [1.0, scale_y, 0.0, (1.0 - scale_y) * 0.5]
+                    [1.0, scale_y, 0.0, (1.0 - scale_y) * alignment.y]
                 } else {
                     let scale_x = output_aspect / image_aspect;
-                    [scale_x, 1.0, (1.0 - scale_x) * 0.5, 0.0]
+                    [scale_x, 1.0, (1.0 - scale_x) * alignment.x, 0.0]
                 }
             }
             FitMode::Contain => {
                 if output_aspect > image_aspect {
                     let content_scale_x = image_aspect / output_aspect;
-                    [1.0 / content_scale_x, 1.0, 0.5 - 0.5 / content_scale_x, 0.0]
+                    [
+                        1.0 / content_scale_x,
+                        1.0,
+                        -((1.0 / content_scale_x) - 1.0) * alignment.x,
+                        0.0,
+                    ]
                 } else {
                     let content_scale_y = output_aspect / image_aspect;
-                    [1.0, 1.0 / content_scale_y, 0.0, 0.5 - 0.5 / content_scale_y]
+                    [
+                        1.0,
+                        1.0 / content_scale_y,
+                        0.0,
+                        -((1.0 / content_scale_y) - 1.0) * alignment.y,
+                    ]
                 }
             }
         }

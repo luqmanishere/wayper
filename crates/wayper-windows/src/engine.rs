@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Instant};
 
 use color_eyre::Result;
-use wayper_windows::config::ResolvedImageContent;
+use wayper_windows::config::{Config, ResolvedContent};
 use wgpu::naga::FastHashMap;
 use winit::{
     dpi::PhysicalSize,
@@ -17,7 +17,7 @@ pub struct Engine {
     renderer: Renderer,
     outputs: FastHashMap<String, OutputState>,
     window_id_iden_map: FastHashMap<WindowId, String>,
-    default_image: ResolvedImageContent,
+    config: Config,
 }
 
 pub struct OutputState {
@@ -33,38 +33,56 @@ pub struct SchedulePlan {
 }
 
 impl Engine {
-    pub async fn new(default_image: ResolvedImageContent) -> Result<Self> {
+    /// Create a new instance of Engine. Internally, it also creates a new renderer.
+    pub async fn new(config: Config) -> Result<Self> {
         Ok(Self {
             renderer: Renderer::new().await?,
             outputs: Default::default(),
             window_id_iden_map: Default::default(),
-            default_image,
+            config,
         })
     }
 
+    /// Whether the output is registered in the engine
     pub fn has_output(&self, output_iden: &str) -> bool {
         self.outputs.contains_key(output_iden)
     }
 
+    /// Get the window for the output
     pub fn get_window(&self, output_iden: &str) -> Option<&Arc<Window>> {
         self.outputs.get(output_iden).map(|output| &output.window)
     }
 
+    /// Get the output_id for the provided window id
     pub fn output_id_for_window(&self, window_id: &WindowId) -> Option<&String> {
         self.window_id_iden_map.get(window_id)
     }
 
+    /// Register an output with the engine
     pub fn add_output(
         &mut self,
         output_iden: String,
         window: Arc<Window>,
         size: PhysicalSize<u32>,
     ) -> Result<()> {
+        let resolved = self.config.resolve_output_content(&output_iden)?;
         self.renderer.create_surface(
             output_iden.clone(),
             (size.width, size.height),
             window.clone(),
         )?;
+
+        let player = match resolved {
+            ResolvedContent::Image(image) => {
+                Player::image(image.path, image.fit.into(), image.alignment.into())
+            }
+            ResolvedContent::Video(_) => {
+                color_eyre::eyre::bail!("video content is not implemented yet in wayper-windows")
+            }
+            ResolvedContent::Scene(_) => {
+                color_eyre::eyre::bail!("scene content is not implemented yet in wayper-windows")
+            }
+        };
 
         self.window_id_iden_map
             .insert(window.id(), output_iden.clone());
@@ -73,16 +91,15 @@ impl Engine {
             OutputState {
                 window,
                 size,
-                player: Player::image(
-                    self.default_image.path.clone(),
-                    self.default_image.fit.into(),
-                ),
+                player,
                 dirty: true,
             },
         );
         Ok(())
     }
 
+    /// Resize an output to the provided size. If the output has no attached window/surface, it will
+    /// error.
     pub fn resize_output(&mut self, output_iden: &str, new_size: PhysicalSize<u32>) -> Result<()> {
         if let Some(output) = self.outputs.get_mut(output_iden) {
             output.size = new_size;
@@ -92,6 +109,7 @@ impl Engine {
             .resize_surface(output_iden, (new_size.width, new_size.height))
     }
 
+    /// Render for an output
     pub fn render_output(&mut self, output_iden: &str, now: Instant) -> Result<()> {
         let output = self
             .outputs

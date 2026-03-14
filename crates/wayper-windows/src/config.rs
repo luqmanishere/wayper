@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
     sync::LazyLock,
@@ -29,15 +30,33 @@ pub fn default_config_path() -> PathBuf {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub path: Option<PathBuf>,
-    pub content: ContentConfig,
+    pub defaults: OutputConfig,
+    pub outputs: HashMap<String, OutputConfig>,
 }
 
 impl Config {
     pub fn new(config_str: &str) -> Result<Self> {
         let config: ConfigFile = toml::from_str(config_str)?;
+        let defaults = config
+            .defaults
+            .unwrap_or_default()
+            .resolve(None)
+            .ok_or_eyre("config.defaults.content is required")?;
+        let outputs = config
+            .outputs
+            .into_iter()
+            .map(|(name, output)| {
+                let resolved = output.resolve(Some(&defaults)).ok_or_else(|| {
+                    eyre!("output {name:?} does not define content and no defaults exist")
+                })?;
+                Ok((name, resolved))
+            })
+            .collect::<Result<HashMap<_, _>>>()?;
+
         Ok(Self {
             path: None,
-            content: config.content,
+            defaults,
+            outputs,
         })
     }
 
@@ -47,6 +66,24 @@ impl Config {
         Ok(config)
     }
 
+    pub fn get_output_config(&self, output_name: &str) -> OutputConfig {
+        self.outputs
+            .get(output_name)
+            .cloned()
+            .unwrap_or_else(|| self.defaults.clone())
+    }
+
+    pub fn resolve_output_content(&self, output_name: &str) -> Result<ResolvedContent> {
+        self.get_output_config(output_name).resolve_content()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct OutputConfig {
+    pub content: ContentConfig,
+}
+
+impl OutputConfig {
     pub fn resolve_content(&self) -> Result<ResolvedContent> {
         match &self.content {
             ContentConfig::Image(config) => Ok(ResolvedContent::Image(config.resolve()?)),
@@ -58,7 +95,23 @@ impl Config {
 
 #[derive(Debug, Clone, Deserialize)]
 struct ConfigFile {
-    content: ContentConfig,
+    defaults: Option<OutputConfigReader>,
+    #[serde(default)]
+    outputs: HashMap<String, OutputConfigReader>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct OutputConfigReader {
+    content: Option<ContentConfig>,
+}
+
+impl OutputConfigReader {
+    fn resolve(self, defaults: Option<&OutputConfig>) -> Option<OutputConfig> {
+        let content = self
+            .content
+            .or_else(|| defaults.map(|defaults| defaults.content.clone()))?;
+        Some(OutputConfig { content })
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -76,6 +129,8 @@ pub struct ImageContentConfig {
     pub folders: Vec<PathBuf>,
     #[serde(default)]
     pub fit: FitModeConfig,
+    #[serde(default)]
+    pub alignment: AlignmentConfig,
 }
 
 impl ImageContentConfig {
@@ -95,7 +150,8 @@ impl ImageContentConfig {
 
         Ok(ResolvedImageContent {
             path,
-            fit: self.fit.into(),
+            fit: self.fit,
+            alignment: self.alignment,
         })
     }
 
@@ -127,6 +183,7 @@ impl ImageContentConfig {
 pub struct VideoContentConfig {
     pub path: PathBuf,
     pub fit: Option<FitModeConfig>,
+    pub alignment: Option<AlignmentConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -145,6 +202,7 @@ pub enum ResolvedContent {
 pub struct ResolvedImageContent {
     pub path: PathBuf,
     pub fit: FitModeConfig,
+    pub alignment: AlignmentConfig,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Default)]
@@ -154,6 +212,41 @@ pub enum FitModeConfig {
     #[default]
     Cover,
     Stretch,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct AlignmentConfig {
+    #[serde(default)]
+    pub horizontal: HorizontalAlignmentConfig,
+    #[serde(default)]
+    pub vertical: VerticalAlignmentConfig,
+}
+
+impl Default for AlignmentConfig {
+    fn default() -> Self {
+        Self {
+            horizontal: HorizontalAlignmentConfig::default(),
+            vertical: VerticalAlignmentConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum HorizontalAlignmentConfig {
+    Left,
+    #[default]
+    Center,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum VerticalAlignmentConfig {
+    Top,
+    #[default]
+    Center,
+    Bottom,
 }
 
 fn is_supported_image(path: &Path) -> bool {
@@ -172,30 +265,61 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_single_image_config() {
+    fn parses_defaults_and_output_override() {
         let config = Config::new(
             r#"
-                [content]
+                [defaults.content]
                 type = "image"
                 path = "samples/wallpapers/example.jpg"
                 fit = "contain"
+
+                [defaults.content.alignment]
+                horizontal = "center"
+                vertical = "center"
+
+                [outputs.primary.content]
+                type = "image"
+                path = "samples/wallpapers/example-2.jpg"
+                fit = "cover"
+
+                [outputs.primary.content.alignment]
+                horizontal = "right"
+                vertical = "top"
             "#,
         )
         .unwrap();
 
-        let ResolvedContent::Image(image) = config.resolve_content().unwrap() else {
+        let primary = config.get_output_config("primary");
+        let fallback = config.get_output_config("secondary");
+
+        let ResolvedContent::Image(primary) = primary.resolve_content().unwrap() else {
+            panic!("expected image content");
+        };
+        let ResolvedContent::Image(fallback) = fallback.resolve_content().unwrap() else {
             panic!("expected image content");
         };
 
-        assert_eq!(image.path, PathBuf::from("samples/wallpapers/example.jpg"));
-        assert!(matches!(image.fit, FitModeConfig::Contain));
+        assert_eq!(
+            primary.path,
+            PathBuf::from("samples/wallpapers/example-2.jpg")
+        );
+        assert!(matches!(primary.fit, FitModeConfig::Cover));
+        assert!(matches!(
+            primary.alignment.horizontal,
+            HorizontalAlignmentConfig::Right
+        ));
+        assert_eq!(
+            fallback.path,
+            PathBuf::from("samples/wallpapers/example.jpg")
+        );
+        assert!(matches!(fallback.fit, FitModeConfig::Contain));
     }
 
     #[test]
     fn parses_future_video_content() {
         let config = Config::new(
             r#"
-                [content]
+                [defaults.content]
                 type = "video"
                 path = "samples/videos/demo.mp4"
                 fit = "cover"
@@ -203,7 +327,8 @@ mod tests {
         )
         .unwrap();
 
-        let ResolvedContent::Video(video) = config.resolve_content().unwrap() else {
+        let ResolvedContent::Video(video) = config.resolve_output_content("primary").unwrap()
+        else {
             panic!("expected video content");
         };
 
