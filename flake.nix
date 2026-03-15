@@ -36,7 +36,11 @@
         ...
       }: let
         # custom toolchain for the latest stable from fenix
-        toolchain = fenix.packages.${system}.stable.toolchain;
+        toolchain = with fenix.packages.${system};
+          combine [
+            stable.toolchain
+            targets.x86_64-pc-windows-msvc.stable.rust-std
+          ];
 
         naersk' = pkgs.callPackage naersk {
           cargo = toolchain;
@@ -111,6 +115,8 @@
             just
             ripgrep
             stdenv.cc
+            cargo-xwin
+            rust-analyzer
 
             # testing apparatus
             sway

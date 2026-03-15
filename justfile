@@ -8,6 +8,12 @@ run-release:
 run-ldebug:
     cargo r -- -l debug -c samples/test_config.toml
 
+run-windows:
+    CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER="/usr/bin/env" cargo xwin run --target x86_64-pc-windows-msvc -p wayper-windows -- --config samples/windows_config.toml
+
+windows-cache:
+    cargo xwin cache windows-msvc-sysroot
+
 # build the project with nix
 build-nix:
     nix build
