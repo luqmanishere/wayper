@@ -25,7 +25,7 @@ mod renderer;
 
 fn main() -> color_eyre::Result<()> {
     env_logger::Builder::from_env(Env::default().default_filter_or(if cfg!(debug_assertions) {
-        "debug"
+        "wayper-windows=debug,info"
     } else {
         "info"
     }))
@@ -79,6 +79,7 @@ impl ApplicationHandler<UserEvent> for App {
             if !self.engine.has_output(&output_iden) {
                 // make new window
                 let size = mon.size();
+                // TODO: remove the flickering that occurs when a window is initially created
                 let window = Arc::new(
                     event_loop
                         .create_window(

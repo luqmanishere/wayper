@@ -1,7 +1,7 @@
 [defaults.content]
 type = "image"
 path = "samples/wallpapers/waifu/wallhaven-9djped.jpg"
-fit = "cover"
+fit = "contain"
 
 [defaults.content.alignment]
 horizontal = "center"

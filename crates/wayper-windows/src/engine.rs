@@ -66,6 +66,11 @@ impl Engine {
         size: PhysicalSize<u32>,
     ) -> Result<()> {
         let resolved = self.config.resolve_output_content(&output_iden)?;
+        log::info!(
+            "adding output with iden {output_iden} and size {}x{}",
+            size.width,
+            size.height
+        );
         self.renderer.create_surface(
             output_iden.clone(),
             (size.width, size.height),

@@ -156,6 +156,7 @@ impl Renderer {
         })
     }
 
+    /// Create a new surface for a window
     pub fn create_surface(
         &mut self,
         output_iden: String,
@@ -348,6 +349,7 @@ impl Renderer {
         Ok(())
     }
 
+    /// Produce a configuraton for the surface, given the size
     fn surface_config_for(
         &self,
         surface: &wgpu::Surface,
