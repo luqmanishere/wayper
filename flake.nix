@@ -71,6 +71,7 @@
                   vulkan-tools-lunarg
                   vulkan-extension-layer
                   vulkan-validation-layers
+                  wayland
                 ]
               }
             '';
