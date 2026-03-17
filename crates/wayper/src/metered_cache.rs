@@ -93,8 +93,7 @@ impl<K: Hash + Eq + Clone + std::fmt::Debug, V> MeteredCache<K, V> {
                 let evicted_key = evicted_key.clone();
                 if let Some(evicted_size) = self.sizes.remove(&evicted_key) {
                     self.evictions.fetch_add(1, Ordering::Relaxed);
-                    self.total_bytes
-                        .fetch_sub(evicted_size, Ordering::Relaxed);
+                    self.total_bytes.fetch_sub(evicted_size, Ordering::Relaxed);
                     tracing::debug!(
                         key = ?evicted_key,
                         size_mb = evicted_size as f64 / 1_048_576.0,
@@ -106,8 +105,7 @@ impl<K: Hash + Eq + Clone + std::fmt::Debug, V> MeteredCache<K, V> {
 
         // Insert new entry
         self.sizes.insert(key.clone(), size_bytes);
-        self.total_bytes
-            .fetch_add(size_bytes, Ordering::Relaxed);
+        self.total_bytes.fetch_add(size_bytes, Ordering::Relaxed);
         self.total_inserted.fetch_add(1, Ordering::Relaxed);
 
         self.cache.get_or_insert(key, f)

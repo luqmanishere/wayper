@@ -44,6 +44,7 @@ impl Drop for GpuOperationTimer {
     }
 }
 
+/// Main Renderer struct
 pub struct WgpuRenderer {
     instance: wgpu::Instance,
     pub adapter: Option<wgpu::Adapter>,
@@ -70,6 +71,7 @@ pub struct WgpuRenderer {
 }
 
 impl WgpuRenderer {
+    /// Create a new instance of the renderer
     pub fn new() -> (Sender<RenderCommand>, wgpu::Instance) {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             // TODO: support for other platforms via winit for debugging
@@ -86,6 +88,7 @@ impl WgpuRenderer {
             texture_loader_worker(load_rx, result_tx);
         });
 
+        // send the instance into a seperate thread
         let instance1 = instance.clone();
         std::thread::spawn(move || {
             let mut renderer = Self {
@@ -118,6 +121,7 @@ impl WgpuRenderer {
         (command_tx, instance)
     }
 
+    /// worker thread: processes render commands
     fn worker(&mut self, command_rx: Receiver<RenderCommand>) {
         while let Ok(command) = command_rx.recv() {
             let command_name = command.to_string();
@@ -147,6 +151,7 @@ impl WgpuRenderer {
         }
     }
 
+    /// parse and handle commands
     fn handle_command(&mut self, command: RenderCommand) -> color_eyre::Result<()> {
         match command {
             RenderCommand::NewSurface {
@@ -436,10 +441,16 @@ impl WgpuRenderer {
             return Ok(());
         }
 
+        let shader_str = format!(
+            "{}\n{}",
+            include_str!("../shaders/sizing.wgsl"),
+            include_str!("../shaders/shader.wgsl")
+        );
+
         // Load shader
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Image Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/shader.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(shader_str.into()),
         });
 
         // Create bind group layout for texture and sampler
@@ -715,11 +726,15 @@ impl WgpuRenderer {
         tracing::trace!("Texture cache miss - loading from disk");
 
         // Load and resize the image
-        let img = image::open(image_path)?.resize_to_fill(
-            target_size.0,
-            target_size.1,
-            image::imageops::FilterType::Lanczos3,
-        );
+        // let img = image::open(image_path)?.resize_to_fill(
+        //     target_size.0,
+        //     target_size.1,
+        //     image::imageops::FilterType::Lanczos3,
+        // );
+        // Load and resize the image
+
+        let img = image::open(image_path)?;
+
         let rgba = img.to_rgba8();
         let (img_width, img_height) = img.dimensions();
 

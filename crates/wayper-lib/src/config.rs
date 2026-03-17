@@ -114,8 +114,13 @@ impl OutputConfig {
         Ok(vecconf)
     }
 
-    pub fn get_transition_config<'a>(&'a self, global_config: &'a Config) -> Option<&'a TransitionConfig> {
-        self.transition.as_ref().or(global_config.transition.as_ref())
+    pub fn get_transition_config<'a>(
+        &'a self,
+        global_config: &'a Config,
+    ) -> Option<&'a TransitionConfig> {
+        self.transition
+            .as_ref()
+            .or(global_config.transition.as_ref())
     }
 
     pub fn is_transitions_enabled(&self, global_config: &Config) -> bool {
@@ -202,7 +207,9 @@ impl TransitionConfig {
             TransitionSelection::Single(t) => *t,
             TransitionSelection::Random(types) => {
                 let mut rng = rand::thread_rng();
-                *types.choose(&mut rng).unwrap_or(&TransitionTypeEnum::Crossfade)
+                *types
+                    .choose(&mut rng)
+                    .unwrap_or(&TransitionTypeEnum::Crossfade)
             }
         }
     }
@@ -278,9 +285,15 @@ impl Direction {
     }
 }
 
-fn default_duration() -> u32 { 2000 }
-fn default_fps() -> u16 { 30 }
-fn default_edge_width() -> f32 { 0.05 }
+fn default_duration() -> u32 {
+    2000
+}
+fn default_fps() -> u16 {
+    30
+}
+fn default_edge_width() -> f32 {
+    0.05
+}
 
 #[cfg(test)]
 mod tests {
