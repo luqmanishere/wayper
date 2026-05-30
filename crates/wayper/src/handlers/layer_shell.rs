@@ -85,7 +85,6 @@ impl LayerShellHandler for Wayper {
                         && let Err(e) = self.renderer_tx.send(
                             crate::wgpu_renderer::RenderCommand::RequestTextureLoad {
                                 image_path: current_img.to_path_buf(),
-                                target_size: (new_width, new_height),
                                 output_name: output_name.clone(),
                             },
                         )
@@ -98,7 +97,6 @@ impl LayerShellHandler for Wayper {
                         && let Err(e) = self.renderer_tx.send(
                             crate::wgpu_renderer::RenderCommand::RequestTextureLoad {
                                 image_path: next_img.to_path_buf(),
-                                target_size: (new_width, new_height),
                                 output_name: output_name.clone(),
                             },
                         )

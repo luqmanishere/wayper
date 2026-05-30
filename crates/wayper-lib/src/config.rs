@@ -98,6 +98,8 @@ impl Profiles {
 pub struct OutputConfig {
     pub duration: Option<u64>,
     pub path: PathBuf,
+    #[serde(default)]
+    pub fit: FitMode,
     pub run_command: Option<String>,
     pub transition: Option<TransitionConfig>,
     pub transitions_enabled: Option<bool>,
@@ -281,6 +283,29 @@ impl Direction {
             Direction::TopRightToBottomLeft => [-1.0, 1.0],
             Direction::BottomLeftToTopRight => [1.0, -1.0],
             Direction::BottomRightToTopLeft => [-1.0, -1.0],
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FitMode {
+    Stretch,
+    Contain,
+    #[default]
+    Cover,
+    Center,
+    Tile,
+}
+
+impl FitMode {
+    pub fn as_shader_u32(&self) -> u32 {
+        match self {
+            FitMode::Stretch => 0,
+            FitMode::Contain => 1,
+            FitMode::Cover => 2,
+            FitMode::Center => 3,
+            FitMode::Tile => 4,
         }
     }
 }

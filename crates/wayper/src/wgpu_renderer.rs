@@ -11,12 +11,15 @@ use std::{
 };
 
 use color_eyre::eyre::eyre;
-use image::GenericImageView;
+use image::{GenericImageView, imageops::FilterType::Lanczos3};
 use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
 };
 use wayper_lib::socket::GpuMetricsData;
 use wgpu::{naga::FastHashMap, util::DeviceExt};
+
+const FIT_MODE_COVER: u32 = 2;
+const DEFAULT_BACKGROUND: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
 /// RAII timer for GPU operations - logs elapsed time on drop
 struct GpuOperationTimer {
@@ -44,6 +47,13 @@ impl Drop for GpuOperationTimer {
     }
 }
 
+/// A cached texture, with its height and width encoded.
+pub struct CachedTexture {
+    texture: wgpu::Texture,
+    width: u32,
+    height: u32,
+}
+
 /// Main Renderer struct
 pub struct WgpuRenderer {
     instance: wgpu::Instance,
@@ -56,9 +66,9 @@ pub struct WgpuRenderer {
     pub vertex_buffer: Option<wgpu::Buffer>,
     pub index_buffer: Option<wgpu::Buffer>,
     pub sampler: Option<wgpu::Sampler>,
-    pub transition_params_buf: Option<wgpu::Buffer>,
+    pub render_params_buf: Option<wgpu::Buffer>,
     /// Texture management - cache textures by image path + size
-    pub texture_cache: crate::metered_cache::MeteredCache<String, wgpu::Texture>,
+    pub texture_cache: crate::metered_cache::MeteredCache<String, CachedTexture>,
     pub bind_group_cache: crate::metered_cache::MeteredCache<String, wgpu::BindGroup>,
     pub surface_configs: FastHashMap<String, wgpu::SurfaceConfiguration>,
 
@@ -102,7 +112,7 @@ impl WgpuRenderer {
                 vertex_buffer: None,
                 index_buffer: None,
                 sampler: None,
-                transition_params_buf: None,
+                render_params_buf: None,
                 texture_cache: crate::metered_cache::MeteredCache::new(
                     std::num::NonZeroUsize::new(10).expect("non-zero"),
                 ),
@@ -165,10 +175,9 @@ impl WgpuRenderer {
             }
             RenderCommand::RequestTextureLoad {
                 image_path,
-                target_size,
                 output_name,
             } => {
-                self.request_texture_load(image_path.as_path(), target_size, output_name)?;
+                self.request_texture_load(image_path.as_path(), output_name)?;
             }
             RenderCommand::RenderFrame {
                 output_name,
@@ -177,6 +186,7 @@ impl WgpuRenderer {
                 progress,
                 transition_type,
                 direction,
+                fit_mode,
             } => {
                 self.render_frame(
                     &output_name,
@@ -185,6 +195,7 @@ impl WgpuRenderer {
                     progress,
                     transition_type,
                     direction,
+                    fit_mode,
                 )?;
             }
             RenderCommand::LogCacheMetrics => {
@@ -205,19 +216,25 @@ impl WgpuRenderer {
     fn request_texture_load(
         &mut self,
         image_path: &Path,
-        target_size: (u32, u32),
         output_name: String,
     ) -> color_eyre::Result<()> {
-        let cache_key = Self::cache_key(image_path, target_size);
+        let cache_key = Self::cache_key(image_path);
 
         if self.texture_cache.contains(&cache_key) {
             return Ok(());
         }
 
+        let max_2d = if let Some(device) = &self.device {
+            device.limits().max_texture_dimension_2d
+        } else {
+            // This is the max reported by my system
+            8192
+        };
+
         self.texture_loader_tx.send(TextureLoadRequest {
             image_path: image_path.to_path_buf(),
-            target_size,
             output_name,
+            max_2d,
         })?;
 
         Ok(())
@@ -269,7 +286,11 @@ impl WgpuRenderer {
 
             let size_bytes = Self::texture_size_bytes(result.dimensions.0, result.dimensions.1);
             self.texture_cache
-                .get_or_insert(result.cache_key.clone(), size_bytes, || texture);
+                .get_or_insert(result.cache_key.clone(), size_bytes, || CachedTexture {
+                    texture,
+                    width: result.dimensions.0,
+                    height: result.dimensions.1,
+                });
             count += 1;
         }
 
@@ -354,25 +375,20 @@ fn texture_loader_worker(
             "texture_load",
             output = %request.output_name,
             path = %request.image_path.display(),
-            size = format!("{}x{}", request.target_size.0, request.target_size.1)
+            max_2d = %request.max_2d,
         );
         let _enter = span.enter();
 
         let load_start = Instant::now();
-        match load_resize_image(&request.image_path, request.target_size) {
+        match load_image_rgba(&request.image_path, request.max_2d) {
             Ok((image_data, dimensions)) => {
                 let load_time = load_start.elapsed();
                 tracing::debug!(
                     time_ms = load_time.as_millis(),
                     dimensions = format!("{}x{}", dimensions.0, dimensions.1),
-                    "Image loaded and resized"
+                    "Image loaded"
                 );
-                let cache_key = format!(
-                    "{}@{}x{}",
-                    request.image_path.display(),
-                    request.target_size.0,
-                    request.target_size.1
-                );
+                let cache_key = format!("{}", request.image_path.display(),);
 
                 let _ = result_tx.send(TextureLoadResult {
                     cache_key,
@@ -387,16 +403,24 @@ fn texture_loader_worker(
     }
 }
 
-/// Load an image from a path and resize it to a target size
-fn load_resize_image(
+/// Load an image from a path as RGBA pixels at its original dimensions.
+fn load_image_rgba(
     image_path: &Path,
-    target_size: (u32, u32),
+    max_2d: u32,
 ) -> color_eyre::Result<(image::RgbaImage, (u32, u32))> {
-    let img = image::open(image_path)?.resize_to_fill(
-        target_size.0,
-        target_size.1,
-        image::imageops::FilterType::Lanczos3,
-    );
+    let img = {
+        let mut img = image::open(image_path)?;
+        let dim = img.dimensions();
+        if dim.0 > max_2d || dim.1 > max_2d {
+            img = img.resize(max_2d, max_2d, Lanczos3);
+            tracing::debug!(
+                "image {} is too big, resized to bounds {}",
+                image_path.display(),
+                max_2d
+            );
+        }
+        img
+    };
     let rgba = img.to_rgba8();
     let dimensions = rgba.dimensions();
     Ok((rgba, dimensions))
@@ -568,10 +592,14 @@ impl WgpuRenderer {
 
         let indices = [0u16, 1, 2, 0, 2, 3];
 
-        let transition_params = TransitionParams {
+        let transition_params = RenderParams {
             progress: 0.0,
             anim_type: 0,
+            fit_mode: FIT_MODE_COVER,
+            _pad0: 0,
             direction: [0.0, 0.0],
+            output_size: [0.0, 0.0],
+            background: DEFAULT_BACKGROUND,
         };
 
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -586,8 +614,8 @@ impl WgpuRenderer {
             usage: wgpu::BufferUsages::INDEX,
         });
 
-        let transition_params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("transition params buf"),
+        let render_params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("render params buf"),
             contents: bytemuck::bytes_of(&transition_params),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
@@ -606,7 +634,7 @@ impl WgpuRenderer {
         self.bind_group_layout = Some(bind_group_layout);
         self.vertex_buffer = Some(vertex_buffer);
         self.index_buffer = Some(index_buffer);
-        self.transition_params_buf = Some(transition_params_buf);
+        self.render_params_buf = Some(render_params_buf);
         self.sampler = Some(sampler);
 
         tracing::info!("Image pipeline initialized successfully");
@@ -614,13 +642,8 @@ impl WgpuRenderer {
     }
 
     /// Generate cache key from image path and target size
-    fn cache_key(image_path: &Path, target_size: (u32, u32)) -> String {
-        format!(
-            "{}@{}x{}",
-            image_path.display(),
-            target_size.0,
-            target_size.1
-        )
+    fn cache_key(image_path: &Path) -> String {
+        format!("{}", image_path.display(),)
     }
 
     /// Generate cache key for dummy black texture
@@ -694,7 +717,11 @@ impl WgpuRenderer {
         // Cache the texture with size tracking
         let size_bytes = Self::texture_size_bytes(target_size.0, target_size.1);
         self.texture_cache
-            .get_or_insert(cache_key.clone(), size_bytes, || texture);
+            .get_or_insert(cache_key.clone(), size_bytes, || CachedTexture {
+                texture,
+                width: target_size.0,
+                height: target_size.1,
+            });
         Ok(cache_key)
     }
 
@@ -705,7 +732,7 @@ impl WgpuRenderer {
         &mut self,
         image_path: &Path,
         target_size: (u32, u32),
-    ) -> color_eyre::Result<&wgpu::Texture> {
+    ) -> color_eyre::Result<&CachedTexture> {
         let device = self
             .device
             .as_ref()
@@ -715,28 +742,19 @@ impl WgpuRenderer {
             .as_ref()
             .ok_or_else(|| color_eyre::eyre::eyre!("Queue not initialized"))?;
 
-        let cache_key = Self::cache_key(image_path, target_size);
+        let cache_key = Self::cache_key(image_path);
 
         // Check if texture is already cached
         if self.texture_cache.contains(&cache_key) {
             tracing::trace!("Texture cache hit");
+            // return early if already cached
             return Ok(self.texture_cache.get(&cache_key).unwrap());
         }
 
         tracing::trace!("Texture cache miss - loading from disk");
 
-        // Load and resize the image
-        // let img = image::open(image_path)?.resize_to_fill(
-        //     target_size.0,
-        //     target_size.1,
-        //     image::imageops::FilterType::Lanczos3,
-        // );
-        // Load and resize the image
-
-        let img = image::open(image_path)?;
-
-        let rgba = img.to_rgba8();
-        let (img_width, img_height) = img.dimensions();
+        let max_2d = device.limits().max_texture_dimension_2d;
+        let (rgba, (img_width, img_height)) = load_image_rgba(image_path, max_2d)?;
 
         let texture_size = wgpu::Extent3d {
             width: img_width,
@@ -776,7 +794,11 @@ impl WgpuRenderer {
         let size_bytes = Self::texture_size_bytes(img_width, img_height);
         Ok(self
             .texture_cache
-            .get_or_insert(cache_key, size_bytes, || texture))
+            .get_or_insert(cache_key, size_bytes, || CachedTexture {
+                texture,
+                width: img_width,
+                height: img_height,
+            }))
     }
 
     /// Get or create a bind group for two textures
@@ -809,24 +831,22 @@ impl WgpuRenderer {
             .as_ref()
             .ok_or_else(|| color_eyre::eyre::eyre!("Sampler not initialized"))?;
         // Use peek() to avoid mutable borrow issues when accessing multiple cache entries
-        let texture1 = self
+        let texture1 = &self
             .texture_cache
             .peek(&cache_key1.to_string())
-            .ok_or_else(|| {
-                color_eyre::eyre::eyre!("Texture 1 not found in cache: {}", cache_key1)
-            })?;
+            .ok_or_else(|| color_eyre::eyre::eyre!("Texture 1 not found in cache: {}", cache_key1))?
+            .texture;
         let texture_view1 = texture1.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let texture2 = self
+        let texture2 = &self
             .texture_cache
             .peek(&cache_key2.to_string())
-            .ok_or_else(|| {
-                color_eyre::eyre::eyre!("Texture 2 not found in cache: {}", cache_key2)
-            })?;
+            .ok_or_else(|| color_eyre::eyre::eyre!("Texture 2 not found in cache: {}", cache_key2))?
+            .texture;
         let texture_view2 = texture2.create_view(&wgpu::TextureViewDescriptor::default());
 
         let transition_params = self
-            .transition_params_buf
+            .render_params_buf
             .as_ref()
             .expect("buffer initialized")
             .as_entire_buffer_binding();
@@ -863,33 +883,35 @@ impl WgpuRenderer {
         Ok(bind_group_key)
     }
 
-    /// Update transition parameters for animations
-    fn update_transition_params(
+    /// Update render parameters for animations
+    fn update_render_params(
         &mut self,
         progress: f32,
         anim_type: u32,
         direction: [f32; 2],
+        target_size: (f32, f32),
+        fit_mode: u32,
     ) -> color_eyre::Result<()> {
         let queue = self
             .queue
             .as_ref()
             .ok_or_else(|| color_eyre::eyre::eyre!("Queue not initialized"))?;
-        let transition_params_buf = self
-            .transition_params_buf
+        let render_params_buf = self
+            .render_params_buf
             .as_ref()
             .ok_or_else(|| color_eyre::eyre::eyre!("Transition params buffer not initialized"))?;
 
-        let transition_params = TransitionParams {
+        let render_params = RenderParams {
             progress,
             anim_type,
+            fit_mode,
+            _pad0: 0,
             direction,
+            output_size: [target_size.0, target_size.1],
+            background: DEFAULT_BACKGROUND,
         };
 
-        queue.write_buffer(
-            transition_params_buf,
-            0,
-            bytemuck::bytes_of(&transition_params),
-        );
+        queue.write_buffer(render_params_buf, 0, bytemuck::bytes_of(&render_params));
         Ok(())
     }
 
@@ -978,6 +1000,7 @@ impl WgpuRenderer {
         progress: f32,
         transition_type: u32,
         direction: Option<[f32; 2]>,
+        fit_mode: u32,
     ) -> color_eyre::Result<()> {
         let direction = direction.unwrap_or([0.0, 0.0]);
         // Get target size
@@ -989,12 +1012,12 @@ impl WgpuRenderer {
         };
 
         // Load the current image texture
-        let current_cache_key = Self::cache_key(current_image, target_size);
+        let current_cache_key = Self::cache_key(current_image);
         self.load_image_texture(current_image, target_size)?;
 
         // Load or create previous texture
         let previous_cache_key = if let Some(prev_path) = previous_image {
-            let key = Self::cache_key(prev_path, target_size);
+            let key = Self::cache_key(prev_path);
             self.load_image_texture(prev_path, target_size)?;
             key
         } else {
@@ -1006,8 +1029,14 @@ impl WgpuRenderer {
         let bind_group_key =
             self.get_or_create_bind_group(&previous_cache_key, &current_cache_key)?;
 
-        // Set transition parameters
-        self.update_transition_params(progress, transition_type, direction)?;
+        // Set render parameters
+        self.update_render_params(
+            progress,
+            transition_type,
+            direction,
+            (target_size.0 as f32, target_size.1 as f32),
+            fit_mode,
+        )?;
 
         // Get references for rendering
         let device = self
@@ -1108,16 +1137,20 @@ impl WgpuRenderer {
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct TransitionParams {
+struct RenderParams {
     progress: f32,
     anim_type: u32,
+    fit_mode: u32,
+    _pad0: u32,
     direction: [f32; 2],
+    output_size: [f32; 2],
+    background: [f32; 4],
 }
 
 struct TextureLoadRequest {
     image_path: PathBuf,
-    target_size: (u32, u32),
     output_name: String,
+    max_2d: u32,
 }
 
 struct TextureLoadResult {
@@ -1140,7 +1173,6 @@ pub enum RenderCommand {
 
     RequestTextureLoad {
         image_path: PathBuf,
-        target_size: (u32, u32),
         output_name: String,
     },
 
@@ -1151,6 +1183,7 @@ pub enum RenderCommand {
         progress: f32,
         transition_type: u32,
         direction: Option<[f32; 2]>,
+        fit_mode: u32,
     },
     LogCacheMetrics,
     GetMetricsData {

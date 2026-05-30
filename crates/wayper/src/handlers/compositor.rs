@@ -5,6 +5,7 @@ use smithay_client_toolkit::{
     reexports::client::{self, Proxy, QueueHandle},
 };
 use tracing::{debug, error, info, trace};
+use wayper_lib::config::FitMode;
 
 use crate::{
     handlers::{Wayper, utils},
@@ -76,6 +77,12 @@ impl CompositorHandler for Wayper {
                     .start_time
                     .map(|t| t.elapsed().as_millis())
                     .unwrap_or(0);
+                let fit_mode = output_handle
+                    .output_config
+                    .as_ref()
+                    .map(|cfg| cfg.fit)
+                    .unwrap_or(FitMode::default())
+                    .as_shader_u32();
                 let output_name = output_handle.output_name.clone();
 
                 trace!(
@@ -99,6 +106,7 @@ impl CompositorHandler for Wayper {
                     progress,
                     transition_type,
                     direction: Some(transition_direction),
+                    fit_mode,
                 });
                 if let Err(e) = render_frame {
                     error!("failed to render transition frame: {e}");
@@ -202,6 +210,12 @@ impl CompositorHandler for Wayper {
                     );
                 } else {
                     let current_index = output_handle.index;
+                    let fit_mode = output_handle
+                        .output_config
+                        .as_ref()
+                        .map(|cfg| cfg.fit)
+                        .unwrap_or(FitMode::default())
+                        .as_shader_u32();
                     let output_name = output_handle.output_name.clone();
 
                     let previous_img = output_handle.previous_img();
@@ -212,6 +226,7 @@ impl CompositorHandler for Wayper {
                         progress: 1.0,
                         transition_type: 0,
                         direction: None,
+                        fit_mode,
                     });
                     if let Err(e) = render_frame {
                         error!("failed to render frame: {e}");
@@ -243,7 +258,6 @@ impl CompositorHandler for Wayper {
                 if let Some(dims) = output_handle.dimensions
                     && let Err(e) = self.renderer_tx.send(RenderCommand::RequestTextureLoad {
                         image_path: next_image,
-                        target_size: dims,
                         output_name: output_handle.output_name.clone(),
                     })
                 {

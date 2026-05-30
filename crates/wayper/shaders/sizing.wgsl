@@ -1,10 +1,3 @@
-struct ImageSizing {
-    output_size: vec2<f32>,
-    image_size: vec2<f32>,
-    fit_mode: u32,
-    background: vec4<f32>,
-}
-
 const FIT_STRETCH: u32 = 0u;
 const FIT_CONTAIN: u32 = 1u;
 const FIT_COVER: u32 = 2u;
@@ -56,13 +49,30 @@ fn cover_uv(
 
     if image_aspect > output_aspect {
         // Image is wider: crop left/right.
-        scale.x = output_aspect / image_aspect;
+        scale.x = image_aspect / output_aspect;
     } else {
         // Image is taller: crop top/bottom.
-        scale.y = image_aspect / output_aspect;
+        scale.y = output_aspect / image_aspect;
     }
 
     return centered_uv(screen_uv, scale);
+}
+
+fn center_uv(
+    screen_uv: vec2<f32>,
+    image_size: vec2<f32>,
+    output_size: vec2<f32>,
+) -> vec2<f32> {
+    let scale = image_size / output_size;
+    return centered_uv(screen_uv, scale);
+}
+
+fn tile_uv(
+    screen_uv: vec2<f32>,
+    image_size: vec2<f32>,
+    output_size: vec2<f32>,
+) -> vec2<f32> {
+    return fract(screen_uv * (output_size / image_size));
 }
 
 fn map_uv(
@@ -83,13 +93,40 @@ fn map_uv(
         return cover_uv(screen_uv, image_size, output_size);
     }
 
-    // if fit_mode == FIT_CENTER {
-    //     return center_uv(screen_uv, image_size, output_size);
-    // }
+    if fit_mode == FIT_CENTER {
+        return center_uv(screen_uv, image_size, output_size);
+    }
 
-    // if fit_mode == FIT_TILE {
-    //     return tile_uv(screen_uv, image_size, output_size);
-    // }
+    if fit_mode == FIT_TILE {
+        return tile_uv(screen_uv, image_size, output_size);
+    }
 
     return cover_uv(screen_uv, image_size, output_size);
+}
+
+fn should_use_background(fit_mode: u32, uv: vec2<f32>) -> bool {
+    if fit_mode == FIT_CONTAIN || fit_mode == FIT_CENTER {
+        return !inside_unit(uv);
+    }
+
+    return false;
+}
+
+fn sample_sized(
+    tex: texture_2d<f32>,
+    samp: sampler,
+    screen_uv: vec2<f32>,
+    output_size: vec2<f32>,
+    fit_mode: u32,
+    background: vec4<f32>,
+) -> vec4<f32> {
+    let dims = textureDimensions(tex);
+    let image_size = vec2<f32>(f32(dims.x), f32(dims.y));
+    let uv = map_uv(screen_uv, image_size, output_size, fit_mode);
+
+    if should_use_background(fit_mode, uv) {
+        return background;
+    }
+
+    return textureSample(tex, samp, uv);
 }

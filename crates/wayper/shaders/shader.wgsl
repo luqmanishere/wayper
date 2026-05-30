@@ -5,7 +5,7 @@ var tex1: texture_2d<f32>;
 @group(0) @binding(2)
 var tex2: texture_2d<f32>;
 @group(0) @binding(3)
-var<uniform> u_params: TransitionParams;
+var<uniform> u_params: RenderParams;
 
 struct VertexInput {
     @location(0) pos: vec2f,
@@ -17,10 +17,14 @@ struct VertexOutput {
     @location(0) uv: vec2f
 }
 
-struct TransitionParams {
+struct RenderParams {
     progress: f32,
     anim_type: u32,
-    direction: vec2<f32>
+    fit_mode: u32,
+    _pad0: u32,
+    direction: vec2<f32>,
+    output_size: vec2<f32>,
+    background: vec4<f32>,
 }
 
 @vertex
@@ -34,9 +38,9 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     // previous image
-    let color1 = textureSample(tex1, samp, in.uv);
+    let color1 = sample_sized(tex1, samp, in.uv, u_params.output_size, u_params.fit_mode, u_params.background);
     // current image
-    let color2 = textureSample(tex2, samp, in.uv);
+    let color2 = sample_sized(tex2, samp, in.uv, u_params.output_size, u_params.fit_mode, u_params.background);
 
     let progress = u_params.progress;
 
