@@ -255,7 +255,7 @@ impl CompositorHandler for Wayper {
                 output_handle.should_next = false;
 
                 let next_image = output_handle.peek_next_img();
-                if let Some(dims) = output_handle.dimensions
+                if let Some(_dims) = output_handle.dimensions
                     && let Err(e) = self.renderer_tx.send(RenderCommand::RequestTextureLoad {
                         image_path: next_image,
                         output_name: output_handle.output_name.clone(),

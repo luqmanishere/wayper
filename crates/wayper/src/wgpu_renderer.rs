@@ -1,6 +1,7 @@
 //! The wgpu renderer
 //! TODO: heavily comment this arcane piece of shit
 use std::{
+    collections::HashSet,
     path::{Path, PathBuf},
     ptr::NonNull,
     sync::{
@@ -74,6 +75,7 @@ pub struct WgpuRenderer {
 
     texture_loader_tx: Sender<TextureLoadRequest>,
     texture_loader_rx: Receiver<TextureLoadResult>,
+    in_flight_texture_loads: HashSet<String>,
 
     /// Total frames rendered for metrics
     pub total_frames_rendered: AtomicU64,
@@ -122,6 +124,7 @@ impl WgpuRenderer {
                 surface_configs: Default::default(),
                 texture_loader_tx: load_tx,
                 texture_loader_rx: result_rx,
+                in_flight_texture_loads: Default::default(),
                 total_frames_rendered: AtomicU64::new(0),
             };
 
@@ -220,7 +223,9 @@ impl WgpuRenderer {
     ) -> color_eyre::Result<()> {
         let cache_key = Self::cache_key(image_path);
 
-        if self.texture_cache.contains(&cache_key) {
+        if self.texture_cache.contains(&cache_key)
+            || self.in_flight_texture_loads.contains(&cache_key)
+        {
             return Ok(());
         }
 
@@ -231,11 +236,17 @@ impl WgpuRenderer {
             8192
         };
 
-        self.texture_loader_tx.send(TextureLoadRequest {
+        self.in_flight_texture_loads.insert(cache_key);
+
+        if let Err(e) = self.texture_loader_tx.send(TextureLoadRequest {
             image_path: image_path.to_path_buf(),
             output_name,
             max_2d,
-        })?;
+        }) {
+            self.in_flight_texture_loads
+                .remove(&Self::cache_key(image_path));
+            return Err(e.into());
+        }
 
         Ok(())
     }
@@ -255,13 +266,27 @@ impl WgpuRenderer {
         let mut count = 0;
 
         while let Ok(result) = self.texture_loader_rx.try_recv() {
-            if self.texture_cache.contains(&result.cache_key) {
+            let (cache_key, image_data, dimensions) = match result {
+                TextureLoadResult::Loaded {
+                    cache_key,
+                    image_data,
+                    dimensions,
+                } => (cache_key, image_data, dimensions),
+                TextureLoadResult::Failed { cache_key } => {
+                    self.in_flight_texture_loads.remove(&cache_key);
+                    continue;
+                }
+            };
+
+            self.in_flight_texture_loads.remove(&cache_key);
+
+            if self.texture_cache.contains(&cache_key) {
                 continue;
             }
 
             let texture_size = wgpu::Extent3d {
-                width: result.dimensions.0,
-                height: result.dimensions.1,
+                width: dimensions.0,
+                height: dimensions.1,
                 depth_or_array_layers: 1,
             };
 
@@ -276,20 +301,14 @@ impl WgpuRenderer {
                 view_formats: &[],
             });
 
-            write_texture_rgba8_padded(
-                queue,
-                &texture,
-                result.dimensions.0,
-                result.dimensions.1,
-                &result.image_data,
-            );
+            write_texture_rgba8_padded(queue, &texture, dimensions.0, dimensions.1, &image_data);
 
-            let size_bytes = Self::texture_size_bytes(result.dimensions.0, result.dimensions.1);
+            let size_bytes = Self::texture_size_bytes(dimensions.0, dimensions.1);
             self.texture_cache
-                .get_or_insert(result.cache_key.clone(), size_bytes, || CachedTexture {
+                .get_or_insert(cache_key, size_bytes, || CachedTexture {
                     texture,
-                    width: result.dimensions.0,
-                    height: result.dimensions.1,
+                    width: dimensions.0,
+                    height: dimensions.1,
                 });
             count += 1;
         }
@@ -388,16 +407,19 @@ fn texture_loader_worker(
                     dimensions = format!("{}x{}", dimensions.0, dimensions.1),
                     "Image loaded"
                 );
-                let cache_key = format!("{}", request.image_path.display(),);
+                let cache_key = WgpuRenderer::cache_key(&request.image_path);
 
-                let _ = result_tx.send(TextureLoadResult {
+                let _ = result_tx.send(TextureLoadResult::Loaded {
                     cache_key,
                     image_data,
                     dimensions,
                 });
             }
             Err(e) => {
-                tracing::error!("Failed to load image: {}", e)
+                tracing::error!("Failed to load image: {}", e);
+                let _ = result_tx.send(TextureLoadResult::Failed {
+                    cache_key: WgpuRenderer::cache_key(&request.image_path),
+                });
             }
         }
     }
@@ -1153,10 +1175,15 @@ struct TextureLoadRequest {
     max_2d: u32,
 }
 
-struct TextureLoadResult {
-    cache_key: String,
-    image_data: image::RgbaImage,
-    dimensions: (u32, u32),
+enum TextureLoadResult {
+    Loaded {
+        cache_key: String,
+        image_data: image::RgbaImage,
+        dimensions: (u32, u32),
+    },
+    Failed {
+        cache_key: String,
+    },
 }
 
 #[derive(strum::Display)]

@@ -23,7 +23,7 @@ fps = 60
 [sweep-lr.eDP-1]
 duration = 10
 path = "samples/wallpapers/waifu"
-fit = "contain"
+fit = "cover"
 
 [sweep-lr.eDP-1.transition]
 type = "sweep"
