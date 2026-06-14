@@ -51,6 +51,7 @@ mod output;
 // mod render_server;
 #[cfg(target_os = "linux")]
 mod handlers;
+mod scene;
 #[cfg(target_os = "linux")]
 mod wgpu_renderer;
 

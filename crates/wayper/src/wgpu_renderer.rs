@@ -11,13 +11,18 @@ use std::{
     time::Instant,
 };
 
-use color_eyre::eyre::eyre;
+use color_eyre::eyre::{OptionExt, eyre};
 use image::{GenericImageView, imageops::FilterType::Lanczos3};
 use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
 };
 use wayper_lib::socket::GpuMetricsData;
 use wgpu::{naga::FastHashMap, util::DeviceExt};
+
+use crate::{
+    metered_cache::MeteredCache,
+    scene::{Rect, Scene, SceneNode},
+};
 
 const FIT_MODE_COVER: u32 = 2;
 const DEFAULT_BACKGROUND: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
@@ -69,8 +74,8 @@ pub struct WgpuRenderer {
     pub sampler: Option<wgpu::Sampler>,
     pub render_params_buf: Option<wgpu::Buffer>,
     /// Texture management - cache textures by image path + size
-    pub texture_cache: crate::metered_cache::MeteredCache<String, CachedTexture>,
-    pub bind_group_cache: crate::metered_cache::MeteredCache<String, wgpu::BindGroup>,
+    pub texture_cache: MeteredCache<String, CachedTexture>,
+    pub bind_group_cache: MeteredCache<String, wgpu::BindGroup>,
     pub surface_configs: FastHashMap<String, wgpu::SurfaceConfiguration>,
 
     texture_loader_tx: Sender<TextureLoadRequest>,
@@ -80,6 +85,11 @@ pub struct WgpuRenderer {
     /// Total frames rendered for metrics
     pub total_frames_rendered: AtomicU64,
     // TODO: proper keys
+    scene_image_pipeline: Option<wgpu::RenderPipeline>,
+    scene_bind_group_layout: Option<wgpu::BindGroupLayout>,
+    scene_image_node_params_buf: Option<wgpu::Buffer>,
+    scene_bind_group_cache: MeteredCache<String, wgpu::BindGroup>,
+    scene_vertex_buffer: Option<wgpu::Buffer>,
 }
 
 impl WgpuRenderer {
@@ -115,10 +125,10 @@ impl WgpuRenderer {
                 index_buffer: None,
                 sampler: None,
                 render_params_buf: None,
-                texture_cache: crate::metered_cache::MeteredCache::new(
+                texture_cache: MeteredCache::new(
                     std::num::NonZeroUsize::new(10).expect("non-zero"),
                 ),
-                bind_group_cache: crate::metered_cache::MeteredCache::new(
+                bind_group_cache: MeteredCache::new(
                     std::num::NonZeroUsize::new(20).expect("non-zero"),
                 ),
                 surface_configs: Default::default(),
@@ -126,6 +136,13 @@ impl WgpuRenderer {
                 texture_loader_rx: result_rx,
                 in_flight_texture_loads: Default::default(),
                 total_frames_rendered: AtomicU64::new(0),
+                scene_image_pipeline: None,
+                scene_bind_group_layout: None,
+                scene_image_node_params_buf: None,
+                scene_bind_group_cache: MeteredCache::new(
+                    std::num::NonZeroUsize::new(20).expect("non-zero"),
+                ),
+                scene_vertex_buffer: None,
             };
 
             renderer.worker(command_rx);
@@ -200,6 +217,9 @@ impl WgpuRenderer {
                     direction,
                     fit_mode,
                 )?;
+            }
+            RenderCommand::RenderScene { output_name, scene } => {
+                self.render_scene(&output_name, scene)?;
             }
             RenderCommand::LogCacheMetrics => {
                 self.log_cache_metrics();
@@ -663,6 +683,165 @@ impl WgpuRenderer {
         Ok(())
     }
 
+    /// Build and initialize the scene image pipeline
+    #[tracing::instrument(skip(self), fields(format = ?surface_format))]
+    fn init_scene_image_pipeline(
+        &mut self,
+        surface_format: wgpu::TextureFormat,
+    ) -> color_eyre::Result<()> {
+        let device = self.device.as_ref().ok_or_eyre("Device not initialized")?;
+
+        if self.scene_image_pipeline.is_some() {
+            return Ok(());
+        }
+
+        let shader_str = format!(
+            "{}\n{}",
+            include_str!("../shaders/sizing.wgsl"),
+            include_str!("../shaders/image_scene.wgsl")
+        );
+
+        // Load shader
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Scene Image Shader"),
+            source: wgpu::ShaderSource::Wgsl(shader_str.into()),
+        });
+
+        // Create bind group layout for texture and sampler
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Scene Image Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                // only 1 texture is attached
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        // Create pipeline layout
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Scene Image Pipeline Layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        // Create render pipeline
+        let image_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Scene Image Render Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<[f32; 4]>() as wgpu::BufferAddress,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            offset: 0,
+                            shader_location: 0,
+                            format: wgpu::VertexFormat::Float32x2,
+                        },
+                        wgpu::VertexAttribute {
+                            offset: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
+                            shader_location: 1,
+                            format: wgpu::VertexFormat::Float32x2,
+                        },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+            cache: None,
+        });
+
+        // Create quad vertices as flat array (position and uv coordinates)
+        #[rustfmt::skip]
+        let vertices: &[f32] = &[
+            // x, y, u, v
+            0.0, 0.0, 0.0, 0.0, // topleft
+            1.0, 0.0, 1.0, 0.0, // topright
+            1.0, 1.0, 1.0, 1.0, // bottomright
+            0.0, 1.0, 0.0, 1.0, // bottomleft
+        ];
+
+        let image_node_params = ImageNodeParams {
+            rect: [0.0; 4],
+            output_size: [0.0; 2],
+            opacity: 1.0,
+            fit_mode: FIT_MODE_COVER,
+            background: DEFAULT_BACKGROUND,
+        };
+
+        let scene_image_vertex_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Scene Image Vertex Buffer"),
+                contents: bytemuck::cast_slice(vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+
+        let scene_image_params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("scene image params buf"),
+            contents: bytemuck::bytes_of(&image_node_params),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        self.scene_image_pipeline = Some(image_pipeline);
+        self.scene_bind_group_layout = Some(bind_group_layout);
+        self.scene_vertex_buffer = Some(scene_image_vertex_buffer);
+        self.scene_image_node_params_buf = Some(scene_image_params_buf);
+
+        tracing::info!("scene image node pipeline initialized successfully");
+        Ok(())
+    }
+
     /// Generate cache key from image path and target size
     fn cache_key(image_path: &Path) -> String {
         format!("{}", image_path.display(),)
@@ -905,6 +1084,75 @@ impl WgpuRenderer {
         Ok(bind_group_key)
     }
 
+    /// Get or create a bind group for one textures
+    fn get_or_create_bind_group_single(&mut self, cache_key: &str) -> color_eyre::Result<String> {
+        // Generate bind group cache key from both texture keys
+        let bind_group_key = cache_key.to_string();
+
+        // Check if bind group is already cached
+        if self.scene_bind_group_cache.contains(&bind_group_key) {
+            tracing::trace!("Bind group cache hit");
+            return Ok(bind_group_key);
+        }
+
+        tracing::trace!("Bind group cache miss - creating new");
+
+        let device = self
+            .device
+            .as_ref()
+            .ok_or_else(|| color_eyre::eyre::eyre!("Device not initialized"))?;
+        let bind_group_layout = self
+            .scene_bind_group_layout
+            .as_ref()
+            .ok_or_else(|| color_eyre::eyre::eyre!("Bind group layout not initialized"))?;
+        let sampler = self
+            .sampler
+            .as_ref()
+            .ok_or_else(|| color_eyre::eyre::eyre!("Sampler not initialized"))?;
+        // Use peek() to avoid mutable borrow issues when accessing multiple cache entries
+        let texture1 = &self
+            .texture_cache
+            .peek(&cache_key.to_string())
+            .ok_or_else(|| color_eyre::eyre::eyre!("Texture 1 not found in cache: {}", cache_key))?
+            .texture;
+        let texture_view1 = texture1.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let image_node_params = self
+            .scene_image_node_params_buf
+            .as_ref()
+            .expect("buffer initialized")
+            .as_entire_buffer_binding();
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                // tex1 - previous texture
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&texture_view1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Buffer(image_node_params),
+                },
+            ],
+            label: Some("Scene Image Bind Group"),
+        });
+
+        // Cache the bind group (conservative estimate of 256 bytes per bind group)
+        const BIND_GROUP_SIZE_BYTES: u64 = 256;
+        self.scene_bind_group_cache.get_or_insert(
+            bind_group_key.clone(),
+            BIND_GROUP_SIZE_BYTES,
+            || bind_group,
+        );
+        Ok(bind_group_key)
+    }
+
     /// Update render parameters for animations
     fn update_render_params(
         &mut self,
@@ -934,6 +1182,37 @@ impl WgpuRenderer {
         };
 
         queue.write_buffer(render_params_buf, 0, bytemuck::bytes_of(&render_params));
+        Ok(())
+    }
+
+    /// Update scene image node parameters for rendering scenes
+    fn update_image_node_params(
+        &mut self,
+        rect: Rect,
+        output_size: (u32, u32),
+        opacity: f32,
+        fit_mode: u32,
+        background: [f32; 4],
+    ) -> color_eyre::Result<()> {
+        let queue = self.queue.as_ref().ok_or_eyre("Queue not initialized")?;
+        let image_node_params_buf = self
+            .scene_image_node_params_buf
+            .as_ref()
+            .ok_or_eyre("Transition params buffer not initialized")?;
+
+        let image_node_params = ImageNodeParams {
+            rect: rect.as_array(),
+            output_size: [output_size.0 as f32, output_size.1 as f32],
+            opacity,
+            fit_mode,
+            background,
+        };
+
+        queue.write_buffer(
+            image_node_params_buf,
+            0,
+            bytemuck::bytes_of(&image_node_params),
+        );
         Ok(())
     }
 
@@ -999,8 +1278,134 @@ impl WgpuRenderer {
         surface.configure(device, &config);
         self.surface_configs.insert(output_name.to_string(), config);
         self.init_image_pipeline(surface_format)?;
+        self.init_scene_image_pipeline(surface_format)?;
 
         Ok(surface_format)
+    }
+
+    /// Render a scene
+    fn render_scene(&mut self, output_name: &str, scene: Scene) -> color_eyre::Result<()> {
+        // TODO: pain
+
+        // get the target size
+        let target_size = {
+            let surface_config = self.surface_configs.get(output_name).ok_or_else(|| {
+                color_eyre::eyre::eyre!("Surface config not found for output: {}", output_name)
+            })?;
+            (surface_config.width, surface_config.height)
+        };
+
+        let device = self.device.as_ref().ok_or_eyre("Device not initialized")?;
+        let surface = self
+            .map
+            .get(output_name)
+            .ok_or_else(|| eyre!("Surface not found for output: {output_name}"))?;
+
+        let _surface_acquire_timer = GpuOperationTimer::new("surface acquire");
+        let surface_texture = surface.get_current_texture()?;
+        drop(_surface_acquire_timer);
+
+        let surface_view = surface_texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        {
+            // clear to background image
+            let _render_pass_timer = GpuOperationTimer::new("scene_clear_timer");
+            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("scene clear pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &surface_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: scene.background[0] as f64,
+                            g: scene.background[1] as f64,
+                            b: scene.background[2] as f64,
+                            a: scene.background[3] as f64,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+        }
+
+        for node in scene.nodes {
+            match node {
+                SceneNode::Image(image_node) => {
+                    // TODO: more pain
+                    let cache_key = Self::cache_key(&image_node.image_path);
+                    self.load_image_texture(&image_node.image_path, target_size)?;
+
+                    let bind_group_key = self.get_or_create_bind_group_single(&cache_key)?;
+
+                    // update params
+                    self.update_image_node_params(
+                        image_node.rect,
+                        target_size,
+                        image_node.opacity,
+                        image_node.fit.as_shader_u32(),
+                        scene.background,
+                    )?;
+
+                    let pipeline = self
+                        .scene_image_pipeline
+                        .as_ref()
+                        .ok_or_eyre("scene image node pipeline not initialized")?;
+                    let vertex_buffer = self
+                        .scene_vertex_buffer
+                        .as_ref()
+                        .ok_or_eyre("image node vertex buffer not initialized")?;
+                    let index_buffer = self
+                        .index_buffer
+                        .as_ref()
+                        .ok_or_eyre("index buffer not initialized")?;
+                    let bind_group = self
+                        .scene_bind_group_cache
+                        .get(&bind_group_key)
+                        .ok_or_eyre("bind group not found in cache")?;
+
+                    {
+                        let val = format!("{} render pass", image_node.image_path.display());
+                        let mut render_pass =
+                            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some(&val),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: &surface_view,
+                                    depth_slice: None,
+                                    resolve_target: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Load,
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                })],
+                                depth_stencil_attachment: None,
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                            });
+                        render_pass.set_pipeline(pipeline);
+                        render_pass.set_bind_group(0, bind_group, &[]);
+                        render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                        render_pass
+                            .set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+                        render_pass.draw_indexed(0..6, 0, 0..1);
+                    }
+                }
+            }
+        }
+
+        let queue = self.queue.as_ref().ok_or_eyre("Queue not initialized")?;
+        queue.submit(Some(encoder.finish()));
+
+        surface_texture.present();
+
+        self.total_frames_rendered.fetch_add(1, Ordering::Relaxed);
+        Ok(())
     }
 
     /// Unified rendering method that handles both transitions and instant switches.
@@ -1169,6 +1574,16 @@ struct RenderParams {
     background: [f32; 4],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct ImageNodeParams {
+    rect: [f32; 4],
+    output_size: [f32; 2],
+    opacity: f32,
+    fit_mode: u32,
+    background: [f32; 4],
+}
+
 struct TextureLoadRequest {
     image_path: PathBuf,
     output_name: String,
@@ -1212,6 +1627,13 @@ pub enum RenderCommand {
         direction: Option<[f32; 2]>,
         fit_mode: u32,
     },
+
+    /// Render a scene
+    RenderScene {
+        output_name: String,
+        scene: Scene,
+    },
+
     LogCacheMetrics,
     GetMetricsData {
         reply: oneshot::Sender<GpuMetricsData>,

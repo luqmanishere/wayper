@@ -10,6 +10,7 @@ use wayper_lib::config::FitMode;
 use crate::{
     handlers::{Wayper, utils},
     map::OutputKey,
+    scene::{ImageNode, Scene, SceneNode},
     wgpu_renderer::RenderCommand,
 };
 
@@ -210,24 +211,26 @@ impl CompositorHandler for Wayper {
                     );
                 } else {
                     let current_index = output_handle.index;
-                    let fit_mode = output_handle
+                    let output_size = output_handle.dimensions.unwrap_or((0, 0));
+                    let fit = output_handle
                         .output_config
                         .as_ref()
                         .map(|cfg| cfg.fit)
-                        .unwrap_or(FitMode::default())
-                        .as_shader_u32();
+                        .unwrap_or(FitMode::default());
                     let output_name = output_handle.output_name.clone();
-
-                    let previous_img = output_handle.previous_img();
-                    let render_frame = self.renderer_tx.send(RenderCommand::RenderFrame {
+                    let scene = Scene {
+                        background: [0.0, 0.0, 0.0, 1.0],
+                        nodes: vec![SceneNode::Image(ImageNode::fullscreen(
+                            image.clone(),
+                            output_size,
+                            fit,
+                        ))],
+                    };
+                    let render_frame = self.renderer_tx.send(RenderCommand::RenderScene {
                         output_name: output_name.clone(),
-                        previous_image: previous_img,
-                        current_image: image.clone(),
-                        progress: 1.0,
-                        transition_type: 0,
-                        direction: None,
-                        fit_mode,
+                        scene,
                     });
+
                     if let Err(e) = render_frame {
                         error!("failed to render frame: {e}");
                     }
