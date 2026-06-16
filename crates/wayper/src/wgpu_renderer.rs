@@ -21,7 +21,7 @@ use wgpu::{naga::FastHashMap, util::DeviceExt};
 
 use crate::{
     metered_cache::MeteredCache,
-    scene::{Rect, Scene, SceneNode},
+    scene::{Scene, SceneNode},
 };
 
 const FIT_MODE_COVER: u32 = 2;
@@ -56,8 +56,8 @@ impl Drop for GpuOperationTimer {
 /// A cached texture, with its height and width encoded.
 pub struct CachedTexture {
     texture: wgpu::Texture,
-    width: u32,
-    height: u32,
+    _width: u32,
+    _height: u32,
 }
 
 /// Main Renderer struct
@@ -87,9 +87,8 @@ pub struct WgpuRenderer {
     // TODO: proper keys
     scene_image_pipeline: Option<wgpu::RenderPipeline>,
     scene_bind_group_layout: Option<wgpu::BindGroupLayout>,
-    scene_image_node_params_buf: Option<wgpu::Buffer>,
-    scene_bind_group_cache: MeteredCache<String, wgpu::BindGroup>,
     scene_vertex_buffer: Option<wgpu::Buffer>,
+    scene_buffer_pool: SceneBufferPool,
 }
 
 impl WgpuRenderer {
@@ -138,11 +137,8 @@ impl WgpuRenderer {
                 total_frames_rendered: AtomicU64::new(0),
                 scene_image_pipeline: None,
                 scene_bind_group_layout: None,
-                scene_image_node_params_buf: None,
-                scene_bind_group_cache: MeteredCache::new(
-                    std::num::NonZeroUsize::new(20).expect("non-zero"),
-                ),
                 scene_vertex_buffer: None,
+                scene_buffer_pool: SceneBufferPool::new(),
             };
 
             renderer.worker(command_rx);
@@ -327,8 +323,8 @@ impl WgpuRenderer {
             self.texture_cache
                 .get_or_insert(cache_key, size_bytes, || CachedTexture {
                     texture,
-                    width: dimensions.0,
-                    height: dimensions.1,
+                    _width: dimensions.0,
+                    _height: dimensions.1,
                 });
             count += 1;
         }
@@ -812,14 +808,6 @@ impl WgpuRenderer {
             0.0, 1.0, 0.0, 1.0, // bottomleft
         ];
 
-        let image_node_params = ImageNodeParams {
-            rect: [0.0; 4],
-            output_size: [0.0; 2],
-            opacity: 1.0,
-            fit_mode: FIT_MODE_COVER,
-            background: DEFAULT_BACKGROUND,
-        };
-
         let scene_image_vertex_buffer =
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Scene Image Vertex Buffer"),
@@ -827,16 +815,9 @@ impl WgpuRenderer {
                 usage: wgpu::BufferUsages::VERTEX,
             });
 
-        let scene_image_params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("scene image params buf"),
-            contents: bytemuck::bytes_of(&image_node_params),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
         self.scene_image_pipeline = Some(image_pipeline);
         self.scene_bind_group_layout = Some(bind_group_layout);
         self.scene_vertex_buffer = Some(scene_image_vertex_buffer);
-        self.scene_image_node_params_buf = Some(scene_image_params_buf);
 
         tracing::info!("scene image node pipeline initialized successfully");
         Ok(())
@@ -920,8 +901,8 @@ impl WgpuRenderer {
         self.texture_cache
             .get_or_insert(cache_key.clone(), size_bytes, || CachedTexture {
                 texture,
-                width: target_size.0,
-                height: target_size.1,
+                _width: target_size.0,
+                _height: target_size.1,
             });
         Ok(cache_key)
     }
@@ -997,8 +978,8 @@ impl WgpuRenderer {
             .texture_cache
             .get_or_insert(cache_key, size_bytes, || CachedTexture {
                 texture,
-                width: img_width,
-                height: img_height,
+                _width: img_width,
+                _height: img_height,
             }))
     }
 
@@ -1084,6 +1065,7 @@ impl WgpuRenderer {
         Ok(bind_group_key)
     }
 
+    /*
     /// Get or create a bind group for one textures
     fn get_or_create_bind_group_single(&mut self, cache_key: &str) -> color_eyre::Result<String> {
         // Generate bind group cache key from both texture keys
@@ -1151,7 +1133,8 @@ impl WgpuRenderer {
             || bind_group,
         );
         Ok(bind_group_key)
-    }
+        }
+        */
 
     /// Update render parameters for animations
     fn update_render_params(
@@ -1182,37 +1165,6 @@ impl WgpuRenderer {
         };
 
         queue.write_buffer(render_params_buf, 0, bytemuck::bytes_of(&render_params));
-        Ok(())
-    }
-
-    /// Update scene image node parameters for rendering scenes
-    fn update_image_node_params(
-        &mut self,
-        rect: Rect,
-        output_size: (u32, u32),
-        opacity: f32,
-        fit_mode: u32,
-        background: [f32; 4],
-    ) -> color_eyre::Result<()> {
-        let queue = self.queue.as_ref().ok_or_eyre("Queue not initialized")?;
-        let image_node_params_buf = self
-            .scene_image_node_params_buf
-            .as_ref()
-            .ok_or_eyre("Transition params buffer not initialized")?;
-
-        let image_node_params = ImageNodeParams {
-            rect: rect.as_array(),
-            output_size: [output_size.0 as f32, output_size.1 as f32],
-            opacity,
-            fit_mode,
-            background,
-        };
-
-        queue.write_buffer(
-            image_node_params_buf,
-            0,
-            bytemuck::bytes_of(&image_node_params),
-        );
         Ok(())
     }
 
@@ -1295,11 +1247,28 @@ impl WgpuRenderer {
             (surface_config.width, surface_config.height)
         };
 
+        // ensure required textures are loaded
+        for node in &scene.nodes {
+            match node {
+                SceneNode::Image(image_node) => {
+                    self.load_image_texture(&image_node.image_path, target_size)?;
+                }
+            }
+        }
+
         let device = self.device.as_ref().ok_or_eyre("Device not initialized")?;
         let surface = self
             .map
             .get(output_name)
             .ok_or_else(|| eyre!("Surface not found for output: {output_name}"))?;
+        let image_bg_layout = self
+            .scene_bind_group_layout
+            .as_ref()
+            .ok_or_else(|| color_eyre::eyre::eyre!("Bind group layout not initialized"))?;
+        let sampler = self
+            .sampler
+            .as_ref()
+            .ok_or_eyre("Sampler not initialized")?;
 
         let _surface_acquire_timer = GpuOperationTimer::new("surface acquire");
         let surface_texture = surface.get_current_texture()?;
@@ -1309,11 +1278,67 @@ impl WgpuRenderer {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
+        let queue = self.queue.as_ref().ok_or_eyre("Queue not initialized")?;
+
+        // prepare the draw
+        let mut prepared_draws = vec![];
+        for (i, node) in scene.nodes.iter().enumerate() {
+            match node {
+                SceneNode::Image(image_node) => {
+                    let cache_key = Self::cache_key(&image_node.image_path);
+
+                    let slot = self.scene_buffer_pool.get_buffer_mut(device, i);
+                    let image_params = ImageNodeParams {
+                        rect: image_node.rect.as_array(),
+                        output_size: [target_size.0 as f32, target_size.1 as f32],
+                        opacity: image_node.opacity,
+                        fit_mode: image_node.fit.as_shader_u32(),
+                        background: scene.background,
+                    };
+
+                    queue.write_buffer(&slot.buffer, 0, bytemuck::bytes_of(&image_params));
+
+                    if slot.image_path.as_ref() != Some(&image_node.image_path) {
+                        let texture = &self
+                            .texture_cache
+                            .peek(&cache_key)
+                            .ok_or_else(|| eyre!("texture not found in cache: {}", cache_key))?
+                            .texture;
+                        let texture_view =
+                            texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+                        slot.bind_group =
+                            Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                label: Some("image node bg"),
+                                layout: image_bg_layout,
+                                entries: &[
+                                    wgpu::BindGroupEntry {
+                                        binding: 0,
+                                        resource: wgpu::BindingResource::Sampler(sampler),
+                                    },
+                                    wgpu::BindGroupEntry {
+                                        binding: 1,
+                                        resource: wgpu::BindingResource::TextureView(&texture_view),
+                                    },
+                                    wgpu::BindGroupEntry {
+                                        binding: 2,
+                                        resource: slot.buffer.as_entire_binding(),
+                                    },
+                                ],
+                            }));
+                        slot.image_path = Some(image_node.image_path.clone());
+                    }
+
+                    prepared_draws.push(PreparedDraw::Image { slot_index: i });
+                }
+            }
+        }
+
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         {
             // clear to background image
             let _render_pass_timer = GpuOperationTimer::new("scene_clear_timer");
-            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("scene clear pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &surface_view,
@@ -1333,61 +1358,28 @@ impl WgpuRenderer {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-        }
 
-        for node in scene.nodes {
-            match node {
-                SceneNode::Image(image_node) => {
-                    // TODO: more pain
-                    let cache_key = Self::cache_key(&image_node.image_path);
-                    self.load_image_texture(&image_node.image_path, target_size)?;
+            let pipeline = self
+                .scene_image_pipeline
+                .as_ref()
+                .ok_or_eyre("scene image node pipeline not initialized")?;
+            let vertex_buffer = self
+                .scene_vertex_buffer
+                .as_ref()
+                .ok_or_eyre("image node vertex buffer not initialized")?;
+            let index_buffer = self
+                .index_buffer
+                .as_ref()
+                .ok_or_eyre("index buffer not initialized")?;
 
-                    let bind_group_key = self.get_or_create_bind_group_single(&cache_key)?;
-
-                    // update params
-                    self.update_image_node_params(
-                        image_node.rect,
-                        target_size,
-                        image_node.opacity,
-                        image_node.fit.as_shader_u32(),
-                        scene.background,
-                    )?;
-
-                    let pipeline = self
-                        .scene_image_pipeline
-                        .as_ref()
-                        .ok_or_eyre("scene image node pipeline not initialized")?;
-                    let vertex_buffer = self
-                        .scene_vertex_buffer
-                        .as_ref()
-                        .ok_or_eyre("image node vertex buffer not initialized")?;
-                    let index_buffer = self
-                        .index_buffer
-                        .as_ref()
-                        .ok_or_eyre("index buffer not initialized")?;
-                    let bind_group = self
-                        .scene_bind_group_cache
-                        .get(&bind_group_key)
-                        .ok_or_eyre("bind group not found in cache")?;
-
-                    {
-                        let val = format!("{} render pass", image_node.image_path.display());
-                        let mut render_pass =
-                            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                label: Some(&val),
-                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                    view: &surface_view,
-                                    depth_slice: None,
-                                    resolve_target: None,
-                                    ops: wgpu::Operations {
-                                        load: wgpu::LoadOp::Load,
-                                        store: wgpu::StoreOp::Store,
-                                    },
-                                })],
-                                depth_stencil_attachment: None,
-                                timestamp_writes: None,
-                                occlusion_query_set: None,
-                            });
+            for prep in prepared_draws {
+                match prep {
+                    PreparedDraw::Image { slot_index } => {
+                        let slot = self.scene_buffer_pool.get_buffer(slot_index);
+                        let bind_group = slot
+                            .bind_group
+                            .as_ref()
+                            .ok_or_eyre("slot bind group does not exist")?;
                         render_pass.set_pipeline(pipeline);
                         render_pass.set_bind_group(0, bind_group, &[]);
                         render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
@@ -1399,7 +1391,6 @@ impl WgpuRenderer {
             }
         }
 
-        let queue = self.queue.as_ref().ok_or_eyre("Queue not initialized")?;
         queue.submit(Some(encoder.finish()));
 
         surface_texture.present();
@@ -1638,6 +1629,58 @@ pub enum RenderCommand {
     GetMetricsData {
         reply: oneshot::Sender<GpuMetricsData>,
     },
+}
+
+struct SceneBufferPool {
+    buffers: Vec<SceneBufferSlot>,
+}
+
+impl SceneBufferPool {
+    pub fn new() -> Self {
+        Self { buffers: vec![] }
+    }
+
+    pub fn get_buffer_mut(&mut self, device: &wgpu::Device, index: usize) -> &mut SceneBufferSlot {
+        while self.buffers.len() <= index {
+            tracing::info!(
+                "current buffer count {}, adding new buffer...",
+                self.buffers.len()
+            );
+
+            const SCENE_PARAM_BUFFER_INIT_SIZE: u64 = 64;
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("scene buffer pool"),
+                size: SCENE_PARAM_BUFFER_INIT_SIZE,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+
+            self.buffers.push(SceneBufferSlot {
+                buffer,
+                _capacity: SCENE_PARAM_BUFFER_INIT_SIZE,
+                image_path: None,
+                bind_group: None,
+            });
+        }
+
+        self.buffers.get_mut(index).expect("buffer exists")
+    }
+
+    pub fn get_buffer(&self, index: usize) -> &SceneBufferSlot {
+        self.buffers.get(index).expect("slot buffer exists")
+    }
+}
+
+struct SceneBufferSlot {
+    buffer: wgpu::Buffer,
+    _capacity: u64,
+
+    image_path: Option<PathBuf>,
+    bind_group: Option<wgpu::BindGroup>,
+}
+
+enum PreparedDraw {
+    Image { slot_index: usize },
 }
 
 pub fn create_surface_from_handles(

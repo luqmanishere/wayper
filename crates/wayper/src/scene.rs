@@ -23,6 +23,7 @@ pub struct ImageNode {
     pub fit: FitMode,
 }
 
+#[expect(unused)]
 impl ImageNode {
     /// Create a new fullscreen image
     pub fn fullscreen(image_path: PathBuf, output_size: (u32, u32), fit: FitMode) -> Self {
