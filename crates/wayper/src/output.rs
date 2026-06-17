@@ -176,8 +176,8 @@ impl TransitionData {
         let Some(start_time) = self.start_time else {
             return 0.0; // Not started yet
         };
-        let elapsed = start_time.elapsed().as_millis() as f32;
-        let duration = self.duration_ms as f32;
+        let elapsed = start_time.elapsed().as_secs_f32();
+        let duration = self.duration_ms as f32 / 1000.0;
         (elapsed / duration).min(1.0) // Clamp to 1.0
     }
 
@@ -201,11 +201,15 @@ impl TransitionData {
 
     /// Check if we should render a new frame based on target FPS
     pub fn should_render_frame(&mut self) -> bool {
-        let target_frame_time = 1000.0 / self.target_fps as f32;
-        let elapsed = self.last_frame_time.elapsed().as_millis() as f32;
+        let target_frame_time =
+            std::time::Duration::from_secs_f64(1.0 / self.target_fps as f64);
+        let now = std::time::Instant::now();
 
-        if elapsed >= target_frame_time {
-            self.last_frame_time = std::time::Instant::now();
+        if now.duration_since(self.last_frame_time) >= target_frame_time {
+            self.last_frame_time += target_frame_time;
+            if now.duration_since(self.last_frame_time) >= target_frame_time {
+                self.last_frame_time = now;
+            }
             true
         } else {
             false

@@ -10,7 +10,7 @@ use wayper_lib::config::FitMode;
 use crate::{
     handlers::{Wayper, utils},
     map::OutputKey,
-    scene::{ImageNode, Scene, SceneNode},
+    scene::{ImageNode, Rect, Scene, SceneNode},
     wgpu_renderer::RenderCommand,
 };
 
@@ -56,11 +56,11 @@ impl CompositorHandler for Wayper {
 
         if let Some(output) = self.outputs.get(OutputKey::SurfaceId(surface_id.clone())) {
             let mut output_handle = output.lock().unwrap();
+            let output_size: (u32, u32) = output_handle.dimensions.unwrap_or((0, 0));
 
             if let Some(transition) = &mut output_handle.transition {
                 transition.start();
 
-                // rip any compositors that can't handle this
                 if !transition.should_render_frame() {
                     trace!("Frame skipped - FPS throttle");
                     surface.frame(qh, surface.clone());
@@ -71,19 +71,18 @@ impl CompositorHandler for Wayper {
                 // i wonder if this is good practice or nah?
                 let progress = transition.progress();
                 let eased_progress = transition.eased_progress();
-                let transition_type = transition.transition_type.to_u32();
+                let trans = transition.transition_type;
                 let transition_direction = transition.direction;
                 let is_complete = transition.is_complete();
                 let transition_elapsed = transition
                     .start_time
                     .map(|t| t.elapsed().as_millis())
                     .unwrap_or(0);
-                let fit_mode = output_handle
+                let fit = output_handle
                     .output_config
                     .as_ref()
                     .map(|cfg| cfg.fit)
-                    .unwrap_or(FitMode::default())
-                    .as_shader_u32();
+                    .unwrap_or(FitMode::default());
                 let output_name = output_handle.output_name.clone();
 
                 trace!(
@@ -100,17 +99,70 @@ impl CompositorHandler for Wayper {
                 };
 
                 let render_start = Instant::now();
-                let render_frame = self.renderer_tx.send(RenderCommand::RenderFrame {
-                    output_name: output_name.clone(),
-                    previous_image: previous_img,
-                    current_image: current_img,
-                    progress,
-                    transition_type,
-                    direction: Some(transition_direction),
-                    fit_mode,
-                });
-                if let Err(e) = render_frame {
-                    error!("failed to render transition frame: {e}");
+                match trans {
+                    wayper_lib::config::TransitionTypeEnum::Crossfade => {
+                        let mut nodes: Vec<_> = vec![];
+                        if let Some(previous_img) = previous_img {
+                            nodes.push(SceneNode::Image(
+                                ImageNode::fullscreen(previous_img, output_size, fit)
+                                    .with_opacity(1.0),
+                            ));
+                        }
+                        nodes.push(SceneNode::Image(
+                            ImageNode::fullscreen(current_img, output_size, fit)
+                                .with_opacity(eased_progress),
+                        ));
+                        let render_scene = self.renderer_tx.send(RenderCommand::RenderScene {
+                            output_name: output_name.clone(),
+                            scene: Scene {
+                                background: [0.0, 0.0, 0.0, 1.0],
+                                nodes,
+                            },
+                        });
+                        if let Err(e) = render_scene {
+                            error!("failed to render transition frame: {e}");
+                        }
+                    }
+                    wayper_lib::config::TransitionTypeEnum::Sweep => {
+                        let dx = transition_direction[0];
+                        let dy = transition_direction[1];
+                        let offset_x = (dx * output_size.0 as f32 * eased_progress).round();
+                        let offset_y = (dy * output_size.1 as f32 * eased_progress).round();
+                        let old_rect = Rect {
+                            x: offset_x,
+                            y: offset_y,
+                            width: output_size.0 as f32,
+                            height: output_size.1 as f32,
+                        };
+                        let new_rect = Rect {
+                            x: offset_x - dx * output_size.0 as f32,
+                            y: offset_y - dy * output_size.1 as f32,
+                            width: output_size.0 as f32,
+                            height: output_size.1 as f32,
+                        };
+                        let mut nodes = vec![];
+                        if let Some(previous_img) = previous_img {
+                            nodes.push(SceneNode::Image(
+                                ImageNode::fullscreen(previous_img, output_size, fit)
+                                    .with_rect(old_rect),
+                            ));
+                        }
+                        nodes.push(SceneNode::Image(
+                            ImageNode::fullscreen(current_img, output_size, fit)
+                                .with_rect(new_rect),
+                        ));
+                        let render_scene = self.renderer_tx.send(RenderCommand::RenderScene {
+                            output_name: output_name.clone(),
+                            scene: Scene {
+                                background: [0.0, 0.0, 0.0, 1.0],
+                                nodes,
+                            },
+                        });
+
+                        if let Err(e) = render_scene {
+                            error!("failed to render transition frame: {e}");
+                        }
+                    }
                 }
                 let render_time = render_start.elapsed();
                 trace!(render_time_us = render_time.as_micros(), "GPU render time");
@@ -209,9 +261,35 @@ impl CompositorHandler for Wayper {
                         "Starting {} transition for {} (duration: {}ms, {} FPS)",
                         transition_name, output_handle.output_name, duration_ms, target_fps
                     );
+
+                    if matches!(
+                        transition_type,
+                        wayper_lib::config::TransitionTypeEnum::Sweep
+                    ) {
+                        let travel_x = transition_direction[0].abs() * output_size.0 as f32;
+                        let travel_y = transition_direction[1].abs() * output_size.1 as f32;
+                        let travel_px = (travel_x * travel_x + travel_y * travel_y).sqrt();
+                        let frame_count = duration_ms as f32 / 1000.0 * target_fps as f32;
+                        let px_per_frame = if frame_count > 0.0 {
+                            travel_px / frame_count
+                        } else {
+                            0.0
+                        };
+
+                        debug!(
+                            output = %output_handle.output_name,
+                            width = output_size.0,
+                            height = output_size.1,
+                            duration_ms,
+                            target_fps,
+                            travel_px = format!("{travel_px:.1}"),
+                            px_per_frame = format!("{px_per_frame:.1}"),
+                            "Movement transition pacing"
+                        );
+                    }
                 } else {
                     let current_index = output_handle.index;
-                    let output_size = output_handle.dimensions.unwrap_or((0, 0));
+                    let output_size: (u32, u32) = output_handle.dimensions.unwrap_or((0, 0));
                     let fit = output_handle
                         .output_config
                         .as_ref()

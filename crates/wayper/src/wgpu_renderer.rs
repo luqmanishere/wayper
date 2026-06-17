@@ -195,24 +195,8 @@ impl WgpuRenderer {
             } => {
                 self.request_texture_load(image_path.as_path(), output_name)?;
             }
-            RenderCommand::RenderFrame {
-                output_name,
-                previous_image,
-                current_image,
-                progress,
-                transition_type,
-                direction,
-                fit_mode,
-            } => {
-                self.render_frame(
-                    &output_name,
-                    previous_image.as_deref(),
-                    current_image.as_path(),
-                    progress,
-                    transition_type,
-                    direction,
-                    fit_mode,
-                )?;
+            RenderCommand::RenderFrame { .. } => {
+                tracing::error!("render frame path has been removed.");
             }
             RenderCommand::RenderScene { output_name, scene } => {
                 self.render_scene(&output_name, scene)?;
@@ -663,7 +647,7 @@ impl WgpuRenderer {
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
@@ -1065,77 +1049,6 @@ impl WgpuRenderer {
         Ok(bind_group_key)
     }
 
-    /*
-    /// Get or create a bind group for one textures
-    fn get_or_create_bind_group_single(&mut self, cache_key: &str) -> color_eyre::Result<String> {
-        // Generate bind group cache key from both texture keys
-        let bind_group_key = cache_key.to_string();
-
-        // Check if bind group is already cached
-        if self.scene_bind_group_cache.contains(&bind_group_key) {
-            tracing::trace!("Bind group cache hit");
-            return Ok(bind_group_key);
-        }
-
-        tracing::trace!("Bind group cache miss - creating new");
-
-        let device = self
-            .device
-            .as_ref()
-            .ok_or_else(|| color_eyre::eyre::eyre!("Device not initialized"))?;
-        let bind_group_layout = self
-            .scene_bind_group_layout
-            .as_ref()
-            .ok_or_else(|| color_eyre::eyre::eyre!("Bind group layout not initialized"))?;
-        let sampler = self
-            .sampler
-            .as_ref()
-            .ok_or_else(|| color_eyre::eyre::eyre!("Sampler not initialized"))?;
-        // Use peek() to avoid mutable borrow issues when accessing multiple cache entries
-        let texture1 = &self
-            .texture_cache
-            .peek(&cache_key.to_string())
-            .ok_or_else(|| color_eyre::eyre::eyre!("Texture 1 not found in cache: {}", cache_key))?
-            .texture;
-        let texture_view1 = texture1.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let image_node_params = self
-            .scene_image_node_params_buf
-            .as_ref()
-            .expect("buffer initialized")
-            .as_entire_buffer_binding();
-
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Sampler(sampler),
-                },
-                // tex1 - previous texture
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&texture_view1),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Buffer(image_node_params),
-                },
-            ],
-            label: Some("Scene Image Bind Group"),
-        });
-
-        // Cache the bind group (conservative estimate of 256 bytes per bind group)
-        const BIND_GROUP_SIZE_BYTES: u64 = 256;
-        self.scene_bind_group_cache.get_or_insert(
-            bind_group_key.clone(),
-            BIND_GROUP_SIZE_BYTES,
-            || bind_group,
-        );
-        Ok(bind_group_key)
-        }
-        */
-
     /// Update render parameters for animations
     fn update_render_params(
         &mut self,
@@ -1408,6 +1321,8 @@ impl WgpuRenderer {
     /// * `current_image` - Current/target image to display
     /// * `progress` - Transition progress 0.0-1.0 (1.0 = show current fully, 0.0 = show previous)
     /// * `transition_type` - Type of transition effect (0 = crossfade, etc.)
+    #[expect(unused)]
+    #[deprecated]
     #[tracing::instrument(skip(self, previous_image, current_image),
         fields(output = output_name, progress = progress, transition_type = transition_type))]
     fn render_frame(
@@ -1609,6 +1524,7 @@ pub enum RenderCommand {
         output_name: String,
     },
 
+    #[expect(unused)]
     RenderFrame {
         output_name: String,
         previous_image: Option<PathBuf>,

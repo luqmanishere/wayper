@@ -27,7 +27,7 @@ fit = "cover"
 
 [sweep-lr.eDP-1.transition]
 type = "sweep"
-duration_ms = 1500
+duration_ms = 3000
 fps = 60
 
 [sweep-lr.eDP-1.transition.sweep]

@@ -152,6 +152,32 @@ impl LayerShellHandler for Wayper {
                         output_guard.output_name, duration_ms, target_fps
                     );
 
+                    if matches!(
+                        transition_type,
+                        wayper_lib::config::TransitionTypeEnum::Sweep
+                    ) {
+                        let travel_x = transition_direction[0].abs() * new_width as f32;
+                        let travel_y = transition_direction[1].abs() * new_height as f32;
+                        let travel_px = (travel_x * travel_x + travel_y * travel_y).sqrt();
+                        let frame_count = duration_ms as f32 / 1000.0 * target_fps as f32;
+                        let px_per_frame = if frame_count > 0.0 {
+                            travel_px / frame_count
+                        } else {
+                            0.0
+                        };
+
+                        debug!(
+                            output = %output_guard.output_name,
+                            width = new_width,
+                            height = new_height,
+                            duration_ms,
+                            target_fps,
+                            travel_px = format!("{travel_px:.1}"),
+                            px_per_frame = format!("{px_per_frame:.1}"),
+                            "Movement transition pacing"
+                        );
+                    }
+
                     layer.wl_surface().frame(_qh, layer.wl_surface().clone());
                     layer.wl_surface().commit();
                     debug!("finished configure, frame queued");
