@@ -401,9 +401,9 @@ pub struct GpuMetricsData {
     pub texture_cache_size: usize,
     pub texture_cache_hits: u64,
     pub texture_cache_misses: u64,
-    pub bind_group_cache_size: usize,
-    pub bind_group_cache_hits: u64,
-    pub bind_group_cache_misses: u64,
+    pub scene_buffer_slots: usize,
+    pub scene_bind_groups: usize,
+    pub scene_buffer_bytes: u64,
     pub total_textures_loaded: u64,
     pub total_frames_rendered: u64,
 }
@@ -418,14 +418,6 @@ impl std::fmt::Display for GpuMetricsData {
             0.0
         };
 
-        let bind_group_hit_rate = if self.bind_group_cache_hits + self.bind_group_cache_misses > 0 {
-            (self.bind_group_cache_hits as f64
-                / (self.bind_group_cache_hits + self.bind_group_cache_misses) as f64)
-                * 100.0
-        } else {
-            0.0
-        };
-
         writeln!(f, "GPU Performance Metrics:")?;
         writeln!(f, "  Texture Cache:")?;
         writeln!(f, "    Size: {} textures", self.texture_cache_size)?;
@@ -434,13 +426,10 @@ impl std::fmt::Display for GpuMetricsData {
             "    Hits: {} | Misses: {} | Hit Rate: {:.1}%",
             self.texture_cache_hits, self.texture_cache_misses, texture_hit_rate
         )?;
-        writeln!(f, "  Bind Group Cache:")?;
-        writeln!(f, "    Size: {} bind groups", self.bind_group_cache_size)?;
-        writeln!(
-            f,
-            "    Hits: {} | Misses: {} | Hit Rate: {:.1}%",
-            self.bind_group_cache_hits, self.bind_group_cache_misses, bind_group_hit_rate
-        )?;
+        writeln!(f, "  Scene Resources:")?;
+        writeln!(f, "    Buffer Slots: {}", self.scene_buffer_slots)?;
+        writeln!(f, "    Cached Bind Groups: {}", self.scene_bind_groups)?;
+        writeln!(f, "    Buffer Capacity: {} bytes", self.scene_buffer_bytes)?;
         writeln!(f, "  Total Textures Loaded: {}", self.total_textures_loaded)?;
         write!(f, "  Total Frames Rendered: {}", self.total_frames_rendered)
     }

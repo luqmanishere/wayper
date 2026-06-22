@@ -24,8 +24,8 @@ use crate::{
     scene::{Scene, SceneNode},
 };
 
-const FIT_MODE_COVER: u32 = 2;
-const DEFAULT_BACKGROUND: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+#[expect(unused)]
+pub const DEFAULT_BACKGROUND: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
 /// RAII timer for GPU operations - logs elapsed time on drop
 struct GpuOperationTimer {
@@ -67,15 +67,10 @@ pub struct WgpuRenderer {
     pub device: Option<wgpu::Device>,
     pub queue: Option<wgpu::Queue>,
     pub map: FastHashMap<String, wgpu::Surface<'static>>,
-    pub image_pipeline: Option<wgpu::RenderPipeline>,
-    pub bind_group_layout: Option<wgpu::BindGroupLayout>,
-    pub vertex_buffer: Option<wgpu::Buffer>,
     pub index_buffer: Option<wgpu::Buffer>,
     pub sampler: Option<wgpu::Sampler>,
-    pub render_params_buf: Option<wgpu::Buffer>,
     /// Texture management - cache textures by image path + size
     pub texture_cache: MeteredCache<String, CachedTexture>,
-    pub bind_group_cache: MeteredCache<String, wgpu::BindGroup>,
     pub surface_configs: FastHashMap<String, wgpu::SurfaceConfiguration>,
 
     texture_loader_tx: Sender<TextureLoadRequest>,
@@ -118,17 +113,10 @@ impl WgpuRenderer {
                 device: None,
                 queue: None,
                 map: Default::default(),
-                image_pipeline: None,
-                bind_group_layout: None,
-                vertex_buffer: None,
                 index_buffer: None,
                 sampler: None,
-                render_params_buf: None,
                 texture_cache: MeteredCache::new(
                     std::num::NonZeroUsize::new(10).expect("non-zero"),
-                ),
-                bind_group_cache: MeteredCache::new(
-                    std::num::NonZeroUsize::new(20).expect("non-zero"),
                 ),
                 surface_configs: Default::default(),
                 texture_loader_tx: load_tx,
@@ -194,9 +182,6 @@ impl WgpuRenderer {
                 output_name,
             } => {
                 self.request_texture_load(image_path.as_path(), output_name)?;
-            }
-            RenderCommand::RenderFrame { .. } => {
-                tracing::error!("render frame path has been removed.");
             }
             RenderCommand::RenderScene { output_name, scene } => {
                 self.render_scene(&output_name, scene)?;
@@ -472,197 +457,6 @@ impl WgpuRenderer {
         Ok(())
     }
 
-    /// Build and initialize the image pipeline
-    #[tracing::instrument(skip(self), fields(format = ?surface_format))]
-    fn init_image_pipeline(
-        &mut self,
-        surface_format: wgpu::TextureFormat,
-    ) -> color_eyre::Result<()> {
-        let device = self
-            .device
-            .as_ref()
-            .ok_or_else(|| color_eyre::eyre::eyre!("Device not initialized"))?;
-
-        if self.image_pipeline.is_some() {
-            return Ok(());
-        }
-
-        let shader_str = format!(
-            "{}\n{}",
-            include_str!("../shaders/sizing.wgsl"),
-            include_str!("../shaders/shader.wgsl")
-        );
-
-        // Load shader
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Image Shader"),
-            source: wgpu::ShaderSource::Wgsl(shader_str.into()),
-        });
-
-        // Create bind group layout for texture and sampler
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Image Bind Group Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
-
-        // Create pipeline layout
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Image Pipeline Layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
-        });
-
-        // Create render pipeline
-        let image_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Image Render Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<[f32; 4]>() as wgpu::BufferAddress,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute {
-                            offset: 0,
-                            shader_location: 0,
-                            format: wgpu::VertexFormat::Float32x2,
-                        },
-                        wgpu::VertexAttribute {
-                            offset: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
-                            shader_location: 1,
-                            format: wgpu::VertexFormat::Float32x2,
-                        },
-                    ],
-                }],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState {
-                count: 1,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview: None,
-            cache: None,
-        });
-
-        // Create quad vertices as flat array (position and UV coordinates)
-        let vertices: &[f32] = &[
-            // bottom-left: pos(-1, -1), uv(0, 1)
-            -1.0, -1.0, 0.0, 1.0, // bottom-right: pos(1, -1), uv(1, 1)
-            1.0, -1.0, 1.0, 1.0, // top-right: pos(1, 1), uv(1, 0)
-            1.0, 1.0, 1.0, 0.0, // top-left: pos(-1, 1), uv(0, 0)
-            -1.0, 1.0, 0.0, 0.0,
-        ];
-
-        let indices = [0u16, 1, 2, 0, 2, 3];
-
-        let transition_params = RenderParams {
-            progress: 0.0,
-            anim_type: 0,
-            fit_mode: FIT_MODE_COVER,
-            _pad0: 0,
-            direction: [0.0, 0.0],
-            output_size: [0.0, 0.0],
-            background: DEFAULT_BACKGROUND,
-        };
-
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Index Buffer"),
-            contents: bytemuck::cast_slice(&indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-
-        let render_params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("render params buf"),
-            contents: bytemuck::bytes_of(&transition_params),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
-            ..Default::default()
-        });
-
-        self.image_pipeline = Some(image_pipeline);
-        self.bind_group_layout = Some(bind_group_layout);
-        self.vertex_buffer = Some(vertex_buffer);
-        self.index_buffer = Some(index_buffer);
-        self.render_params_buf = Some(render_params_buf);
-        self.sampler = Some(sampler);
-
-        tracing::info!("Image pipeline initialized successfully");
-        Ok(())
-    }
-
     /// Build and initialize the scene image pipeline
     #[tracing::instrument(skip(self), fields(format = ?surface_format))]
     fn init_scene_image_pipeline(
@@ -782,6 +576,16 @@ impl WgpuRenderer {
             cache: None,
         });
 
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
         // Create quad vertices as flat array (position and uv coordinates)
         #[rustfmt::skip]
         let vertices: &[f32] = &[
@@ -791,6 +595,13 @@ impl WgpuRenderer {
             1.0, 1.0, 1.0, 1.0, // bottomright
             0.0, 1.0, 0.0, 1.0, // bottomleft
         ];
+        let indices = [0u16, 1, 2, 0, 2, 3];
+
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Index Buffer"),
+            contents: bytemuck::cast_slice(&indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
 
         let scene_image_vertex_buffer =
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -799,6 +610,8 @@ impl WgpuRenderer {
                 usage: wgpu::BufferUsages::VERTEX,
             });
 
+        self.sampler = Some(sampler);
+        self.index_buffer = Some(index_buffer);
         self.scene_image_pipeline = Some(image_pipeline);
         self.scene_bind_group_layout = Some(bind_group_layout);
         self.scene_vertex_buffer = Some(scene_image_vertex_buffer);
@@ -812,83 +625,9 @@ impl WgpuRenderer {
         format!("{}", image_path.display(),)
     }
 
-    /// Generate cache key for dummy black texture
-    fn dummy_texture_key(target_size: (u32, u32)) -> String {
-        format!("__dummy_black__@{}x{}", target_size.0, target_size.1)
-    }
-
     /// Calculate memory size of a texture in bytes (RGBA8 = 4 bytes per pixel)
     fn texture_size_bytes(width: u32, height: u32) -> u64 {
         (width as u64) * (height as u64) * 4
-    }
-
-    /// Get or create a black dummy texture of the specified size
-    fn get_or_create_dummy_texture(
-        &mut self,
-        target_size: (u32, u32),
-    ) -> color_eyre::Result<String> {
-        let cache_key = Self::dummy_texture_key(target_size);
-
-        // Check if dummy texture is already cached
-        if self.texture_cache.contains(&cache_key) {
-            return Ok(cache_key);
-        }
-
-        let device = self
-            .device
-            .as_ref()
-            .ok_or_else(|| color_eyre::eyre::eyre!("Device not initialized"))?;
-        let queue = self
-            .queue
-            .as_ref()
-            .ok_or_else(|| color_eyre::eyre::eyre!("Queue not initialized"))?;
-
-        // Create black image data
-        let black_data = vec![0u8; (target_size.0 * target_size.1 * 4) as usize];
-
-        let texture_size = wgpu::Extent3d {
-            width: target_size.0,
-            height: target_size.1,
-            depth_or_array_layers: 1,
-        };
-
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Dummy Black Texture"),
-            size: texture_size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-
-        // Write black data to the texture
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &black_data,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * target_size.0),
-                rows_per_image: Some(target_size.1),
-            },
-            texture_size,
-        );
-
-        // Cache the texture with size tracking
-        let size_bytes = Self::texture_size_bytes(target_size.0, target_size.1);
-        self.texture_cache
-            .get_or_insert(cache_key.clone(), size_bytes, || CachedTexture {
-                texture,
-                _width: target_size.0,
-                _height: target_size.1,
-            });
-        Ok(cache_key)
     }
 
     /// Load an image and create a wgpu texture from it
@@ -967,125 +706,13 @@ impl WgpuRenderer {
             }))
     }
 
-    /// Get or create a bind group for two textures
-    fn get_or_create_bind_group(
-        &mut self,
-        cache_key1: &str,
-        cache_key2: &str,
-    ) -> color_eyre::Result<String> {
-        // Generate bind group cache key from both texture keys
-        let bind_group_key = format!("{}+{}", cache_key1, cache_key2);
-
-        // Check if bind group is already cached
-        if self.bind_group_cache.contains(&bind_group_key) {
-            tracing::trace!("Bind group cache hit");
-            return Ok(bind_group_key);
-        }
-
-        tracing::trace!("Bind group cache miss - creating new");
-
-        let device = self
-            .device
-            .as_ref()
-            .ok_or_else(|| color_eyre::eyre::eyre!("Device not initialized"))?;
-        let bind_group_layout = self
-            .bind_group_layout
-            .as_ref()
-            .ok_or_else(|| color_eyre::eyre::eyre!("Bind group layout not initialized"))?;
-        let sampler = self
-            .sampler
-            .as_ref()
-            .ok_or_else(|| color_eyre::eyre::eyre!("Sampler not initialized"))?;
-        // Use peek() to avoid mutable borrow issues when accessing multiple cache entries
-        let texture1 = &self
-            .texture_cache
-            .peek(&cache_key1.to_string())
-            .ok_or_else(|| color_eyre::eyre::eyre!("Texture 1 not found in cache: {}", cache_key1))?
-            .texture;
-        let texture_view1 = texture1.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let texture2 = &self
-            .texture_cache
-            .peek(&cache_key2.to_string())
-            .ok_or_else(|| color_eyre::eyre::eyre!("Texture 2 not found in cache: {}", cache_key2))?
-            .texture;
-        let texture_view2 = texture2.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let transition_params = self
-            .render_params_buf
-            .as_ref()
-            .expect("buffer initialized")
-            .as_entire_buffer_binding();
-
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Sampler(sampler),
-                },
-                // tex1 - previous texture
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&texture_view1),
-                },
-                // tex2 - current texture
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&texture_view2),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Buffer(transition_params),
-                },
-            ],
-            label: Some("Image Bind Group"),
-        });
-
-        // Cache the bind group (conservative estimate of 256 bytes per bind group)
-        const BIND_GROUP_SIZE_BYTES: u64 = 256;
-        self.bind_group_cache
-            .get_or_insert(bind_group_key.clone(), BIND_GROUP_SIZE_BYTES, || bind_group);
-        Ok(bind_group_key)
-    }
-
-    /// Update render parameters for animations
-    fn update_render_params(
-        &mut self,
-        progress: f32,
-        anim_type: u32,
-        direction: [f32; 2],
-        target_size: (f32, f32),
-        fit_mode: u32,
-    ) -> color_eyre::Result<()> {
-        let queue = self
-            .queue
-            .as_ref()
-            .ok_or_else(|| color_eyre::eyre::eyre!("Queue not initialized"))?;
-        let render_params_buf = self
-            .render_params_buf
-            .as_ref()
-            .ok_or_else(|| color_eyre::eyre::eyre!("Transition params buffer not initialized"))?;
-
-        let render_params = RenderParams {
-            progress,
-            anim_type,
-            fit_mode,
-            _pad0: 0,
-            direction,
-            output_size: [target_size.0, target_size.1],
-            background: DEFAULT_BACKGROUND,
-        };
-
-        queue.write_buffer(render_params_buf, 0, bytemuck::bytes_of(&render_params));
-        Ok(())
-    }
-
     /// Log cache metrics for monitoring and debugging
     fn log_cache_metrics(&self) {
         let tex_metrics = self.texture_cache.metrics();
-        let bg_metrics = self.bind_group_cache.metrics();
         let frames = self.total_frames_rendered.load(Ordering::Relaxed);
+        let scene_buffer_slots = self.scene_buffer_pool.len();
+        let scene_bind_groups = self.scene_buffer_pool.bind_group_count();
+        let scene_buffer_bytes = self.scene_buffer_pool.total_capacity();
 
         tracing::info!(
             texture_cache_size = tex_metrics.size,
@@ -1094,12 +721,9 @@ impl WgpuRenderer {
             texture_hit_rate = format!("{:.1}%", tex_metrics.hit_rate()),
             texture_cache_mb = format!("{:.2}", tex_metrics.bytes_mb()),
             texture_evictions = tex_metrics.evictions,
-            bind_group_cache_size = bg_metrics.size,
-            bind_group_cache_hits = bg_metrics.hits,
-            bind_group_cache_misses = bg_metrics.misses,
-            bind_group_hit_rate = format!("{:.1}%", bg_metrics.hit_rate()),
-            bind_group_cache_mb = format!("{:.2}", bg_metrics.bytes_mb()),
-            bind_group_evictions = bg_metrics.evictions,
+            scene_buffer_slots,
+            scene_bind_groups,
+            scene_buffer_bytes,
             total_textures_loaded = self.texture_cache.total_inserted(),
             total_frames_rendered = frames,
             "GPU cache metrics"
@@ -1142,7 +766,6 @@ impl WgpuRenderer {
 
         surface.configure(device, &config);
         self.surface_configs.insert(output_name.to_string(), config);
-        self.init_image_pipeline(surface_format)?;
         self.init_scene_image_pipeline(surface_format)?;
 
         Ok(surface_format)
@@ -1250,9 +873,9 @@ impl WgpuRenderer {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         {
             // clear to background image
-            let _render_pass_timer = GpuOperationTimer::new("scene_clear_timer");
+            let _render_pass_timer = GpuOperationTimer::new("scene_render_timer");
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("scene clear pass"),
+                label: Some("scene render pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &surface_view,
                     resolve_target: None,
@@ -1312,172 +935,21 @@ impl WgpuRenderer {
         Ok(())
     }
 
-    /// Unified rendering method that handles both transitions and instant switches.
-    /// Refer to the arguments.
-    ///
-    /// # Arguments
-    /// * `output_name` - Name of the output to render to
-    /// * `previous_image` - Previous image for transition (None = use black dummy)
-    /// * `current_image` - Current/target image to display
-    /// * `progress` - Transition progress 0.0-1.0 (1.0 = show current fully, 0.0 = show previous)
-    /// * `transition_type` - Type of transition effect (0 = crossfade, etc.)
-    #[expect(unused)]
-    #[deprecated]
-    #[tracing::instrument(skip(self, previous_image, current_image),
-        fields(output = output_name, progress = progress, transition_type = transition_type))]
-    fn render_frame(
-        &mut self,
-        output_name: &str,
-        previous_image: Option<&Path>,
-        current_image: &Path,
-        progress: f32,
-        transition_type: u32,
-        direction: Option<[f32; 2]>,
-        fit_mode: u32,
-    ) -> color_eyre::Result<()> {
-        let direction = direction.unwrap_or([0.0, 0.0]);
-        // Get target size
-        let target_size = {
-            let surface_config = self.surface_configs.get(output_name).ok_or_else(|| {
-                color_eyre::eyre::eyre!("Surface config not found for output: {}", output_name)
-            })?;
-            (surface_config.width, surface_config.height)
-        };
-
-        // Load the current image texture
-        let current_cache_key = Self::cache_key(current_image);
-        self.load_image_texture(current_image, target_size)?;
-
-        // Load or create previous texture
-        let previous_cache_key = if let Some(prev_path) = previous_image {
-            let key = Self::cache_key(prev_path);
-            self.load_image_texture(prev_path, target_size)?;
-            key
-        } else {
-            // Use black dummy for first render or when no previous image
-            self.get_or_create_dummy_texture(target_size)?
-        };
-
-        // Create or get bind group with (previous, current) textures
-        let bind_group_key =
-            self.get_or_create_bind_group(&previous_cache_key, &current_cache_key)?;
-
-        // Set render parameters
-        self.update_render_params(
-            progress,
-            transition_type,
-            direction,
-            (target_size.0 as f32, target_size.1 as f32),
-            fit_mode,
-        )?;
-
-        // Get references for rendering
-        let device = self
-            .device
-            .as_ref()
-            .ok_or_else(|| color_eyre::eyre::eyre!("Device not initialized"))?;
-        let queue = self
-            .queue
-            .as_ref()
-            .ok_or_else(|| color_eyre::eyre::eyre!("Queue not initialized"))?;
-        let render_pipeline = self
-            .image_pipeline
-            .as_ref()
-            .ok_or_else(|| color_eyre::eyre::eyre!("Image pipeline not initialized"))?;
-        let vertex_buffer = self
-            .vertex_buffer
-            .as_ref()
-            .ok_or_else(|| color_eyre::eyre::eyre!("Vertex buffer not initialized"))?;
-        let index_buffer = self
-            .index_buffer
-            .as_ref()
-            .ok_or_else(|| color_eyre::eyre::eyre!("Index buffer not initialized"))?;
-        let surface = self.map.get(output_name).ok_or_else(|| {
-            color_eyre::eyre::eyre!("Surface not found for output: {}", output_name)
-        })?;
-        let bind_group = self
-            .bind_group_cache
-            .get(&bind_group_key)
-            .ok_or_else(|| color_eyre::eyre::eyre!("Bind group not found in cache"))?;
-
-        // Get surface texture and render
-        let _surface_acquire_timer = GpuOperationTimer::new("surface_acquire");
-        let surface_texture = surface.get_current_texture()?;
-        drop(_surface_acquire_timer);
-
-        let surface_view = surface_texture
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
-        let _encoder_timer = GpuOperationTimer::new("command_encoder");
-        let mut encoder = device.create_command_encoder(&Default::default());
-        {
-            let _render_pass_timer = GpuOperationTimer::new("render_pass");
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &surface_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-
-            render_pass.set_pipeline(render_pipeline);
-            render_pass.set_bind_group(0, bind_group, &[]);
-            render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-            render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.draw_indexed(0..6, 0, 0..1);
-        }
-        drop(_encoder_timer);
-
-        let _submit_timer = GpuOperationTimer::new("queue_submit");
-        queue.submit(Some(encoder.finish()));
-        drop(_submit_timer);
-
-        let _present_timer = GpuOperationTimer::new("surface_present");
-        surface_texture.present();
-        drop(_present_timer);
-
-        self.total_frames_rendered.fetch_add(1, Ordering::Relaxed);
-
-        Ok(())
-    }
-
     /// Get GPU metrics data for socket response
     fn get_metrics_data(&self) -> wayper_lib::socket::GpuMetricsData {
         let tex_metrics = self.texture_cache.metrics();
-        let bg_metrics = self.bind_group_cache.metrics();
 
         wayper_lib::socket::GpuMetricsData {
             texture_cache_size: tex_metrics.size,
             texture_cache_hits: tex_metrics.hits,
             texture_cache_misses: tex_metrics.misses,
-            bind_group_cache_size: bg_metrics.size,
-            bind_group_cache_hits: bg_metrics.hits,
-            bind_group_cache_misses: bg_metrics.misses,
+            scene_buffer_slots: self.scene_buffer_pool.len(),
+            scene_bind_groups: self.scene_buffer_pool.bind_group_count(),
+            scene_buffer_bytes: self.scene_buffer_pool.total_capacity(),
             total_textures_loaded: self.texture_cache.total_inserted(),
             total_frames_rendered: self.total_frames_rendered.load(Ordering::Relaxed),
         }
     }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct RenderParams {
-    progress: f32,
-    anim_type: u32,
-    fit_mode: u32,
-    _pad0: u32,
-    direction: [f32; 2],
-    output_size: [f32; 2],
-    background: [f32; 4],
 }
 
 #[repr(C)]
@@ -1524,17 +996,6 @@ pub enum RenderCommand {
         output_name: String,
     },
 
-    #[expect(unused)]
-    RenderFrame {
-        output_name: String,
-        previous_image: Option<PathBuf>,
-        current_image: PathBuf,
-        progress: f32,
-        transition_type: u32,
-        direction: Option<[f32; 2]>,
-        fit_mode: u32,
-    },
-
     /// Render a scene
     RenderScene {
         output_name: String,
@@ -1573,7 +1034,7 @@ impl SceneBufferPool {
 
             self.buffers.push(SceneBufferSlot {
                 buffer,
-                _capacity: SCENE_PARAM_BUFFER_INIT_SIZE,
+                capacity: SCENE_PARAM_BUFFER_INIT_SIZE,
                 image_path: None,
                 bind_group: None,
             });
@@ -1585,11 +1046,26 @@ impl SceneBufferPool {
     pub fn get_buffer(&self, index: usize) -> &SceneBufferSlot {
         self.buffers.get(index).expect("slot buffer exists")
     }
+
+    pub fn len(&self) -> usize {
+        self.buffers.len()
+    }
+
+    pub fn bind_group_count(&self) -> usize {
+        self.buffers
+            .iter()
+            .filter(|slot| slot.bind_group.is_some())
+            .count()
+    }
+
+    pub fn total_capacity(&self) -> u64 {
+        self.buffers.iter().map(|slot| slot.capacity).sum()
+    }
 }
 
 struct SceneBufferSlot {
     buffer: wgpu::Buffer,
-    _capacity: u64,
+    capacity: u64,
 
     image_path: Option<PathBuf>,
     bind_group: Option<wgpu::BindGroup>,
