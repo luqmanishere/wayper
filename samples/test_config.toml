@@ -1,4 +1,4 @@
-default_profile = "sweep-lr"
+default_profile = "slide-lr"
 # Global settings
 transitions_enabled = true
 
@@ -19,33 +19,32 @@ type = "crossfade"
 duration_ms = 2000
 fps = 60
 
-# Profile 2: Left-to-right sweep
-[sweep-lr.eDP-1]
+# Profile 2: Left-to-right slide
+[slide-lr.eDP-1]
 duration = 10
 path = "samples/wallpapers/waifu"
 fit = "cover"
 
-[sweep-lr.eDP-1.transition]
-type = "sweep"
+[slide-lr.eDP-1.transition]
+type = "slide"
 duration_ms = 3000
 fps = 60
 
-[sweep-lr.eDP-1.transition.sweep]
+[slide-lr.eDP-1.transition.slide]
 direction = "left-to-right"
 
-# Profile 3: Diagonal sweep
-[sweep-diagonal.eDP-1]
+# Profile 3: Diagonal slide
+[slide-diagonal.eDP-1]
 duration = 10
 path = "samples/wallpapers/waifu"
 
-[sweep-diagonal.eDP-1.transition]
-type = "sweep"
+[slide-diagonal.eDP-1.transition]
+type = "slide"
 duration_ms = 2000
 fps = 60
 
-[sweep-diagonal.eDP-1.transition.sweep]
+[slide-diagonal.eDP-1.transition.slide]
 direction = "top-left-to-bottom-right"
-edge_width = 0.08
 
 # Profile 4: Random transitions
 [random.eDP-1]
@@ -53,26 +52,25 @@ duration = 10
 path = "samples/wallpapers/waifu"
 
 [random.eDP-1.transition]
-type = ["crossfade", "sweep"]
+type = ["crossfade", "slide"]
 duration_ms = 1500
 fps = 60
 
-[random.eDP-1.transition.sweep]
+[random.eDP-1.transition.slide]
 direction = "right-to-left"
 
-# Profile 5: Fast sweep
+# Profile 5: Fast slide
 [fast.eDP-1]
 duration = 5
 path = "samples/wallpapers/waifu"
 
 [fast.eDP-1.transition]
-type = "sweep"
+type = "slide"
 duration_ms = 500
 fps = 60
 
-[fast.eDP-1.transition.sweep]
+[fast.eDP-1.transition.slide]
 direction = "bottom-to-top"
-edge_width = 0.03
 
 # Profile 6: Slow cinematic
 [slow.eDP-1]
@@ -92,9 +90,9 @@ transitions_enabled = false
 
 # Transition config exists but is disabled by the toggle above
 [no-transition.eDP-1.transition]
-type = "sweep"
+type = "slide"
 duration_ms = 2000
 fps = 60
 
-[no-transition.eDP-1.transition.sweep]
+[no-transition.eDP-1.transition.slide]
 direction = "left-to-right"

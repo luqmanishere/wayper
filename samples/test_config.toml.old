@@ -11,11 +11,11 @@ path = "samples/wallpapers/waifu"
 run_command = "matugen image {image} -m dark"
 
 [waifu.eDP-1.transition]
-type = "sweep"
+type = "slide"
 duration_ms = 2000
 fps = 60
 
-[waifu.eDP-1.transition.sweep]
+[waifu.eDP-1.transition.slide]
 direction = "left-to-right"
 
 [long.eDP-1]

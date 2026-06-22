@@ -53,15 +53,15 @@ Add Wayper to your Home Manager configuration:
 
 - `config.transition.type` (string or list of strings) - Transition type:
   - `"crossfade"` - Smooth crossfade between wallpapers
-  - `"sweep"` - Directional sweep transition
-  - `["crossfade" "sweep"]` - Random selection from list
+  - `"slide"` - Directional slide transition
+  - `["crossfade" "slide"]` - Random selection from list
 
 - `config.transition.duration_ms` (int, optional) - Transition duration in milliseconds
 - `config.transition.fps` (int, optional) - Frames per second for transitions
 
-#### Sweep-Specific Options
+#### Slide-Specific Options
 
-- `config.transition.sweep.direction` (enum, optional) - Sweep direction:
+- `config.transition.slide.direction` (enum, optional) - Slide direction:
   - `"left-to-right"`
   - `"right-to-left"`
   - `"top-to-bottom"`
@@ -70,8 +70,6 @@ Add Wayper to your Home Manager configuration:
   - `"top-right-to-bottom-left"`
   - `"bottom-left-to-top-right"`
   - `"bottom-right-to-top-left"`
-
-- `config.transition.sweep.edge_width` (float, optional) - Sweep edge width (0.0-1.0), default: 0.05
 
 #### Per-Monitor Options
 
@@ -111,12 +109,11 @@ Each monitor in `config.monitorConfigs` can have:
           duration = 300;
           path = "/home/user/wallpapers/laptop";
           transition = {
-            type = "sweep";
+            type = "slide";
             duration_ms = 1500;
             fps = 60;
-            sweep = {
+            slide = {
               direction = "left-to-right";
-              edge_width = 0.05;
             };
           };
         }
@@ -143,10 +140,10 @@ Each monitor in `config.monitorConfigs` can have:
 {
   services.wayper.config = {
     transition = {
-      type = ["crossfade" "sweep"];  # Randomly picks one
+      type = ["crossfade" "slide"];  # Randomly picks one
       duration_ms = 1500;
       fps = 60;
-      sweep = {
+      slide = {
         direction = "top-to-bottom";
       };
     };
@@ -187,7 +184,7 @@ nix-build test.nix
 
 This creates a `result/` directory with generated TOML files:
 - `wayper-basic.toml` - Basic crossfade configuration
-- `wayper-sweep.toml` - Sweep transition with direction
+- `wayper-slide.toml` - Slide transition with direction
 - `wayper-multi-monitor.toml` - Multiple monitors
 - `wayper-mixed.toml` - Mixed transition types
 - `wayper-random.toml` - Random transition selection
@@ -198,7 +195,7 @@ Inspect generated configs:
 
 ```bash
 cat result/wayper-basic.toml
-cat result/wayper-sweep.toml
+cat result/wayper-slide.toml
 ```
 
 ### Assertion-Based Tests
@@ -221,12 +218,12 @@ If tests fail, you'll see detailed error messages indicating which assertions fa
 
 The test suite validates:
 1. Proper `[transition]` block generation (not flat fields)
-2. Sweep configuration with nested `[transition.sweep]` blocks
+2. Slide configuration with nested `[transition.slide]` blocks
 3. Per-monitor transition blocks: `[profile.output.transition]`
 4. Random transition type array syntax
 5. Absence of transition blocks when not configured
 6. Per-monitor `transitions_enabled` flag
-7. All 8 sweep directions work correctly
+7. All 8 slide directions work correctly
 8. Multiple monitor config blocks
 9. `run_command` field inclusion
 10. Field naming uses underscores (not hyphens)

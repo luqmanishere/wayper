@@ -17,8 +17,8 @@ self: {
     then "[${builtins.concatStringsSep ", " (map (t: "\"${t}\"") type)}]"
     else "\"${type}\"";
 
-  # Sweep direction enum
-  sweepDirections = enum [
+  # Slide direction enum
+  slideDirections = enum [
     "left-to-right"
     "right-to-left"
     "top-to-bottom"
@@ -30,7 +30,7 @@ self: {
   ];
 
   # Transition type enum
-  transitionTypeEnum = enum ["crossfade" "sweep"];
+  transitionTypeEnum = enum ["crossfade" "slide"];
 
   # Transition configuration submodule
   transitionSubmodule = submodule {
@@ -50,15 +50,10 @@ self: {
         type = nullOr int;
         default = null;
       };
-      sweep = {
+      slide = {
         direction = mkOption {
-          description = "Sweep direction";
-          type = nullOr sweepDirections;
-          default = null;
-        };
-        edge_width = mkOption {
-          description = "Sweep edge width (0.0-1.0)";
-          type = nullOr float;
+          description = "Slide direction";
+          type = nullOr slideDirections;
           default = null;
         };
       };
@@ -80,20 +75,16 @@ self: {
       if transition.fps != null
       then "fps = ${toString transition.fps}\n"
       else "";
-    sweepStr =
-      if transition.sweep.direction != null || transition.sweep.edge_width != null
+    slideStr =
+      if transition.slide.direction != null
       then let
         dirStr =
-          if transition.sweep.direction != null
-          then "  direction = \"${transition.sweep.direction}\"\n"
+          if transition.slide.direction != null
+          then "  direction = \"${transition.slide.direction}\"\n"
           else "";
-        edgeStr =
-          if transition.sweep.edge_width != null
-          then "  edge_width = ${toString transition.sweep.edge_width}\n"
-          else "";
-      in "\n[${prefix}.sweep]\n${dirStr}${edgeStr}"
+      in "\n[${prefix}.slide]\n${dirStr}"
       else "";
-  in "${typeStr}${durationStr}${fpsStr}${sweepStr}";
+  in "${typeStr}${durationStr}${fpsStr}${slideStr}";
 in {
   options.services.wayper = {
     enable = mkEnableOption "Wayper, the homebrewed wallpaper daemon";
@@ -183,8 +174,7 @@ in {
               cfg.config.transition.type != null
               || cfg.config.transition.duration_ms != null
               || cfg.config.transition.fps != null
-              || cfg.config.transition.sweep.direction != null
-              || cfg.config.transition.sweep.edge_width != null;
+              || cfg.config.transition.slide.direction != null;
           in
             if hasGlobalTransition
             then "[transition]\n${generateTransitionBlock "transition" cfg.config.transition}"
@@ -196,8 +186,7 @@ in {
               monitor.transition.type != null
               || monitor.transition.duration_ms != null
               || monitor.transition.fps != null
-              || monitor.transition.sweep.direction != null
-              || monitor.transition.sweep.edge_width != null;
+              || monitor.transition.slide.direction != null;
             transitionBlock =
               if hasMonitorTransition
               then "\n[${monitor.profile}.${monitor.name}.transition]\n${generateTransitionBlock "${monitor.profile}.${monitor.name}.transition" monitor.transition}"

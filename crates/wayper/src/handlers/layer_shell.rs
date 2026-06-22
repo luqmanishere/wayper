@@ -126,8 +126,8 @@ impl LayerShellHandler for Wayper {
                             let fps = transition_cfg.fps;
                             let td = match transition_type {
                                 wayper_lib::config::TransitionTypeEnum::Crossfade => [0.0, 0.0],
-                                wayper_lib::config::TransitionTypeEnum::Sweep => {
-                                    transition_cfg.sweep.direction.as_vec2()
+                                wayper_lib::config::TransitionTypeEnum::Slide => {
+                                    transition_cfg.slide.direction.as_vec2()
                                 }
                             };
                             (duration, fps, transition_type, td)
@@ -154,7 +154,7 @@ impl LayerShellHandler for Wayper {
 
                     if matches!(
                         transition_type,
-                        wayper_lib::config::TransitionTypeEnum::Sweep
+                        wayper_lib::config::TransitionTypeEnum::Slide
                     ) {
                         let travel_x = transition_direction[0].abs() * new_width as f32;
                         let travel_y = transition_direction[1].abs() * new_height as f32;

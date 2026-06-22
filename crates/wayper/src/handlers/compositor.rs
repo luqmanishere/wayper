@@ -123,7 +123,7 @@ impl CompositorHandler for Wayper {
                             error!("failed to render transition frame: {e}");
                         }
                     }
-                    wayper_lib::config::TransitionTypeEnum::Sweep => {
+                    wayper_lib::config::TransitionTypeEnum::Slide => {
                         let dx = transition_direction[0];
                         let dy = transition_direction[1];
                         let offset_x = (dx * output_size.0 as f32 * eased_progress).round();
@@ -235,8 +235,8 @@ impl CompositorHandler for Wayper {
                     let target_fps = transition_cfg.fps;
                     let transition_direction = match transition_type {
                         wayper_lib::config::TransitionTypeEnum::Crossfade => [0.0, 0.0],
-                        wayper_lib::config::TransitionTypeEnum::Sweep => {
-                            transition_cfg.sweep.direction.as_vec2()
+                        wayper_lib::config::TransitionTypeEnum::Slide => {
+                            transition_cfg.slide.direction.as_vec2()
                         }
                     };
 
@@ -249,7 +249,7 @@ impl CompositorHandler for Wayper {
 
                     let transition_name = match transition_type {
                         wayper_lib::config::TransitionTypeEnum::Crossfade => "crossfade",
-                        wayper_lib::config::TransitionTypeEnum::Sweep => "sweep",
+                        wayper_lib::config::TransitionTypeEnum::Slide => "slide",
                     };
 
                     info!(
@@ -264,7 +264,7 @@ impl CompositorHandler for Wayper {
 
                     if matches!(
                         transition_type,
-                        wayper_lib::config::TransitionTypeEnum::Sweep
+                        wayper_lib::config::TransitionTypeEnum::Slide
                     ) {
                         let travel_x = transition_direction[0].abs() * output_size.0 as f32;
                         let travel_y = transition_direction[1].abs() * output_size.1 as f32;

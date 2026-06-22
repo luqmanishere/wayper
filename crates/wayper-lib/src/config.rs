@@ -199,7 +199,7 @@ pub struct TransitionConfig {
     pub fps: u16,
 
     #[serde(default)]
-    pub sweep: SweepConfig,
+    pub slide: SlideConfig,
 }
 
 impl TransitionConfig {
@@ -228,32 +228,28 @@ pub enum TransitionSelection {
 #[serde(rename_all = "lowercase")]
 pub enum TransitionTypeEnum {
     Crossfade,
-    Sweep,
+    Slide,
 }
 
 impl TransitionTypeEnum {
     pub fn to_u32(&self) -> u32 {
         match self {
             TransitionTypeEnum::Crossfade => 0,
-            TransitionTypeEnum::Sweep => 1,
+            TransitionTypeEnum::Slide => 1,
         }
     }
 }
 
 #[derive(Deserialize, Clone, Debug, PartialEq)]
-pub struct SweepConfig {
+pub struct SlideConfig {
     #[serde(default)]
     pub direction: Direction,
-
-    #[serde(default = "default_edge_width")]
-    pub edge_width: f32,
 }
 
-impl Default for SweepConfig {
+impl Default for SlideConfig {
     fn default() -> Self {
         Self {
             direction: Direction::default(),
-            edge_width: default_edge_width(),
         }
     }
 }
@@ -316,9 +312,6 @@ fn default_duration() -> u32 {
 fn default_fps() -> u16 {
     30
 }
-fn default_edge_width() -> f32 {
-    0.05
-}
 
 #[cfg(test)]
 mod tests {
@@ -358,6 +351,7 @@ mod tests {
             OutputConfig {
                 duration: Some(10),
                 path: "/home/user/wallpapers/personal".into(),
+                fit: FitMode::default(),
                 run_command: Some(String::from("matugen image {image}")),
                 transition: None,
                 transitions_enabled: None,
@@ -368,6 +362,7 @@ mod tests {
             OutputConfig {
                 duration: Some(10),
                 path: "/home/user/wallpapers/work".into(),
+                fit: FitMode::default(),
                 run_command: None,
                 transition: None,
                 transitions_enabled: None,
@@ -382,13 +377,12 @@ mod tests {
     fn test_deserialize_transition_config() {
         let conf_str = r#"
             [transition]
-            type = "sweep"
+            type = "slide"
             duration_ms = 1500
             fps = 60
 
-            [transition.sweep]
+            [transition.slide]
             direction = "left-to-right"
-            edge_width = 0.08
 
             [eDP-1]
             duration = 10
@@ -403,11 +397,11 @@ mod tests {
             path = "/home/user/wallpapers/hdmi"
 
             [HDMI-A-1.transition]
-            type = ["crossfade", "sweep"]
+            type = ["crossfade", "slide"]
             duration_ms = 1000
             fps = 30
 
-            [HDMI-A-1.transition.sweep]
+            [HDMI-A-1.transition.slide]
             direction = "top-left-to-bottom-right"
         "#;
 
@@ -416,9 +410,8 @@ mod tests {
         let global_transition = config.transition.as_ref().unwrap();
         assert_eq!(global_transition.duration_ms, 1500);
         assert_eq!(global_transition.fps, 60);
-        assert_eq!(global_transition.sweep.edge_width, 0.08);
         assert!(matches!(
-            global_transition.sweep.direction,
+            global_transition.slide.direction,
             Direction::LeftToRight
         ));
 
@@ -437,12 +430,12 @@ mod tests {
         if let TransitionSelection::Random(types) = &hdmi_transition.transition_type {
             assert_eq!(types.len(), 2);
             assert!(matches!(types[0], TransitionTypeEnum::Crossfade));
-            assert!(matches!(types[1], TransitionTypeEnum::Sweep));
+            assert!(matches!(types[1], TransitionTypeEnum::Slide));
         } else {
             panic!("Expected Random transition type");
         }
         assert!(matches!(
-            hdmi_transition.sweep.direction,
+            hdmi_transition.slide.direction,
             Direction::TopLeftToBottomRight
         ));
     }
